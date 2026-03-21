@@ -1,0 +1,6 @@
+data/
+*.xlsx
+__pycache__/
+.env
+venv/
+.streamlit/secrets.toml

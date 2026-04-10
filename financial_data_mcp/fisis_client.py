@@ -5,14 +5,20 @@ API 문서: https://fisis.fss.or.kr/fisis/openapi/apiInfo.do
 주요 최적화:
 - 싱글톤 재사용 전제: 인스턴스 내부에 httpx.AsyncClient, 응답 캐시 보관
 - 응답 캐시: 통계 데이터는 변동이 적어 1시간 TTL 캐시
+- 재시도: 지수 백오프 (3회, 5xx/429/transport 에러)
 - 에러 파싱 방어적 처리: 엔드포인트별로 result 래핑/err_msg 스키마가 달라질 수 있음
 """
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 
 from ._cache import TTLCache
+from ._http import mask_params, translate_http_error, with_retry
+
+logger = logging.getLogger("financial_data_mcp.fisis")
 
 BASE_URL = "https://fisis.fss.or.kr/openapi"
 RESPONSE_TTL_SECONDS = 3600  # 1시간
@@ -27,10 +33,7 @@ LARGE_DIVISIONS = {
 
 
 class FisisClient:
-    """FISIS OpenAPI 비동기 클라이언트.
-
-    싱글톤으로 재사용되어야 함 (server.py 의 lru_cache 참고).
-    """
+    """FISIS OpenAPI 비동기 클라이언트. 싱글톤으로 재사용되어야 함."""
 
     def __init__(self, api_key: str) -> None:
         self.api_key = api_key
@@ -61,11 +64,20 @@ class FisisClient:
             cache_key = (endpoint, tuple(sorted(params.items())))
             cached = self._response_cache.get(cache_key)
             if cached is not None:
+                logger.debug("cache hit: %s %s", endpoint, mask_params(params))
                 return cached
 
-        resp = await self._client.get(f"/{endpoint}", params=params)
-        resp.raise_for_status()
-        data = resp.json()
+        logger.debug("api call: %s %s", endpoint, mask_params(params))
+
+        async def _do() -> dict:
+            resp = await self._client.get(f"/{endpoint}", params=params)
+            resp.raise_for_status()
+            return resp.json()
+
+        try:
+            data = await with_retry(_do, label=f"FISIS {endpoint}")
+        except (httpx.HTTPStatusError, httpx.TransportError, httpx.TimeoutException) as e:
+            raise translate_http_error("FISIS", e) from e
 
         # FISIS 응답 스키마는 엔드포인트마다 다를 수 있어 방어적으로 에러 체크
         self._raise_if_error(data)

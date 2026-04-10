@@ -20,39 +20,52 @@ DART(전자공시시스템)과 FISIS(금융통계정보시스템) API를 통해
 환경변수:
     DART_API_KEY: DART OpenAPI 인증키 (https://opendart.fss.or.kr)
     FISIS_API_KEY: FISIS OpenAPI 인증키 (https://fisis.fss.or.kr)
+    LOG_LEVEL: 로그 레벨 (DEBUG/INFO/WARNING/ERROR, 기본 WARNING)
 
     서버 기동 시 프로젝트 루트의 .env 파일을 자동 로드합니다.
 """
 
 from __future__ import annotations
 
+import functools
 import json
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
-# 프로젝트 루트의 .env 자동 로드 (있을 경우)
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
+from . import _validators as v
 from .dart_client import CORP_CLASS, REPORT_CODES, SJ_DIV, DartClient
 from .fisis_client import LARGE_DIVISIONS, FisisClient
+
+# 프로젝트 루트의 .env 자동 로드
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+# 로깅 설정 (stderr로 출력 - stdio MCP는 stdout을 프로토콜용으로 사용)
+_log_level = os.environ.get("LOG_LEVEL", "WARNING").upper()
+logging.basicConfig(
+    level=_log_level,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
+logger = logging.getLogger("financial_data_mcp")
 
 mcp = FastMCP(
     "financial-data",
     instructions=(
         "DART(전자공시시스템)과 FISIS(금융통계정보시스템) 금융 데이터 조회·분석. "
-        "한국 기업의 공시·재무제표·금융통계를 조회합니다."
+        "한국 기업의 공시·재무제표·금융통계를 조회합니다. "
+        "효율 팁: dart_full_financial_statements는 sj_div 파라미터로 "
+        "특정 재무표(BS/IS/CF 등)만 필터하면 토큰 소비를 크게 줄일 수 있습니다."
     ),
 )
 
 
 # ── 클라이언트 싱글톤 ───────────────────────────────────────────
 # lru_cache(maxsize=1)로 프로세스 생애 동안 단일 인스턴스 유지.
-# 이렇게 해야 기업코드 캐시, HTTP 커넥션, 응답 캐시가 모두 재사용됨.
 
 
 @lru_cache(maxsize=1)
@@ -90,6 +103,15 @@ def _drop_empty(d: dict) -> dict:
     return {k: v for k, v in d.items() if v not in (None, "")}
 
 
+# DART 응답에서 흔히 딸려오는 메타 필드 (토큰 낭비)
+_DART_META_FIELDS = frozenset({"status", "message"})
+
+
+def _strip_dart_meta(d: dict) -> dict:
+    """DART 응답에서 status/message 등 메타 필드 제거."""
+    return {k: val for k, val in d.items() if k not in _DART_META_FIELDS}
+
+
 def _compact_disclosure(item: dict) -> dict:
     """공시 항목에서 필수 필드만 추출."""
     return _drop_empty(
@@ -110,7 +132,7 @@ def _compact_fin_row(item: dict) -> dict:
     """재무계정 행에서 필수 필드만 추출 (토큰 ~60% 절감)."""
     return _drop_empty(
         {
-            "corp_code": item.get("corp_code"),  # 다중회사에서만 의미있음
+            "corp_code": item.get("corp_code"),
             "fs_div": item.get("fs_div"),
             "sj_div": item.get("sj_div"),
             "sj_nm": item.get("sj_nm"),
@@ -123,10 +145,7 @@ def _compact_fin_row(item: dict) -> dict:
 
 
 def _fisis_extract_list(data: dict) -> Any:
-    """FISIS 응답에서 list를 방어적으로 추출.
-
-    엔드포인트마다 스키마가 달라 result 안팎을 모두 확인.
-    """
+    """FISIS 응답에서 list를 방어적으로 추출."""
     if not isinstance(data, dict):
         return data
     result = data.get("result")
@@ -135,12 +154,42 @@ def _fisis_extract_list(data: dict) -> Any:
             value = result.get(key)
             if isinstance(value, list):
                 return value
-        return result  # list 못 찾으면 result 전체 반환
+        return result
     for key in ("list", "data"):
         value = data.get(key)
         if isinstance(value, list):
             return value
     return data
+
+
+# ── 에러 처리 데코레이터 ────────────────────────────────────────
+
+ToolFunc = Callable[..., Awaitable[str]]
+
+
+def _tool_safe(fn: ToolFunc) -> ToolFunc:
+    """도구 함수를 감싸 에러를 사용자 친화적 텍스트로 변환.
+
+    - ValueError (검증 실패): [input error] 접두사
+    - RuntimeError (API/HTTP): [api error] 접두사
+    - 기타: [internal error] + 로그
+    """
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs) -> str:
+        try:
+            return await fn(*args, **kwargs)
+        except ValueError as e:
+            logger.info("%s: validation error: %s", fn.__name__, e)
+            return f"[input error] {e}"
+        except RuntimeError as e:
+            logger.warning("%s: api error: %s", fn.__name__, e)
+            return f"[api error] {e}"
+        except Exception as e:
+            logger.exception("%s: unexpected error", fn.__name__)
+            return f"[internal error] {type(e).__name__}: {e}"
+
+    return wrapper
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -149,16 +198,23 @@ def _fisis_extract_list(data: dict) -> Any:
 
 
 @mcp.tool()
+@_tool_safe
 async def dart_search_company(name: str, limit: int = 20) -> str:
     """회사명으로 DART 기업코드(corp_code)를 검색합니다.
 
     다른 DART 도구의 선행 조건. 상장기업 우선 표시.
     최초 호출 시 기업코드 목록(약 90,000건)을 다운로드하고 이후 재사용합니다.
+    동일 검색어 재호출 시 메모리 캐시에서 즉시 반환됩니다.
 
     Args:
-        name: 회사명 (예: "삼성전자", "현대자동차")
-        limit: 최대 결과 수 (기본 20)
+        name: 회사명 (부분일치 가능, 예: "삼성전자", "현대")
+        limit: 최대 결과 수 (기본 20, 1~100)
     """
+    if not name or not name.strip():
+        raise ValueError("name 파라미터는 비어있을 수 없습니다")
+    if not (1 <= limit <= 100):
+        raise ValueError(f"limit은 1~100 사이여야 합니다. 받은 값: {limit}")
+
     results = await _dart().search_company(name, limit)
     if not results:
         return f"'{name}'에 대한 검색 결과가 없습니다."
@@ -166,6 +222,7 @@ async def dart_search_company(name: str, limit: int = 20) -> str:
 
 
 @mcp.tool()
+@_tool_safe
 async def dart_company_overview(corp_code: str) -> str:
     """DART에서 기업개황을 조회합니다.
 
@@ -174,12 +231,13 @@ async def dart_company_overview(corp_code: str) -> str:
     Args:
         corp_code: 기업코드 (8자리, dart_search_company 로 조회)
     """
+    v.validate_corp_code(corp_code)
     data = await _dart().get_company_overview(corp_code)
-    result = {k: v for k, v in data.items() if k not in ("status", "message")}
-    return _json(_drop_empty(result))
+    return _json(_drop_empty(_strip_dart_meta(data)))
 
 
 @mcp.tool()
+@_tool_safe
 async def dart_search_disclosures(
     corp_code: str = "",
     bgn_de: str = "",
@@ -197,11 +255,21 @@ async def dart_search_disclosures(
         corp_code: 기업코드 (8자리, 비워두면 전체)
         bgn_de: 검색 시작일 (YYYYMMDD, 예: "20240101")
         end_de: 검색 종료일 (YYYYMMDD, 예: "20241231")
-        corp_cls: 법인구분 (Y=유가증권, K=코스닥, N=코넥스, E=기타)
+        corp_cls: 법인구분 (Y=유가, K=코스닥, N=코넥스, E=기타, 비워두면 전체)
         pblntf_ty: 공시유형 (A=정기공시, B=주요사항, C=발행, D=지분, E=기타, F=외부감사, G=펀드, H=자산유동화, I=거래소)
-        page_no: 페이지 번호
-        page_count: 페이지당 건수 (최대 100)
+        page_no: 페이지 번호 (기본 1)
+        page_count: 페이지당 건수 (1~100, 기본 10)
     """
+    if corp_code:
+        v.validate_corp_code(corp_code)
+    v.validate_yyyymmdd(bgn_de, "bgn_de")
+    v.validate_yyyymmdd(end_de, "end_de")
+    v.validate_corp_cls(corp_cls)
+    if not (1 <= page_count <= 100):
+        raise ValueError(f"page_count는 1~100 사이여야 합니다. 받은 값: {page_count}")
+    if page_no < 1:
+        raise ValueError(f"page_no는 1 이상이어야 합니다. 받은 값: {page_no}")
+
     data = await _dart().search_disclosures(
         corp_code=corp_code,
         bgn_de=bgn_de,
@@ -224,6 +292,7 @@ async def dart_search_disclosures(
 
 
 @mcp.tool()
+@_tool_safe
 async def dart_financial_statements(
     corp_code: str,
     bsns_year: str,
@@ -239,12 +308,17 @@ async def dart_financial_statements(
         bsns_year: 사업연도 (YYYY, 예: "2024")
         reprt_code: 보고서코드 (11011=사업보고서, 11012=반기, 11013=1분기, 11014=3분기)
     """
+    v.validate_corp_code(corp_code)
+    v.validate_year(bsns_year)
+    v.validate_report_code(reprt_code)
+
     data = await _dart().get_financial_statements(corp_code, bsns_year, reprt_code)
     items = [_compact_fin_row(r) for r in data.get("list", []) or []]
     return _json(items)
 
 
 @mcp.tool()
+@_tool_safe
 async def dart_full_financial_statements(
     corp_code: str,
     bsns_year: str,
@@ -255,7 +329,10 @@ async def dart_full_financial_statements(
     """DART에서 단일회사의 전체 재무제표를 조회합니다.
 
     주요계정보다 상세한 데이터가 필요할 때 사용하세요.
-    sj_div 필터로 특정 표만 추출하면 토큰을 크게 절약할 수 있습니다.
+    **sj_div 파라미터로 특정 재무표만 추출하면 토큰을 1/4~1/5 수준으로 절약할 수 있습니다.**
+
+    연결(CFS) 요청인데 결과가 비면 자동으로 개별(OFS)로 폴백합니다
+    (소규모 기업은 연결재무제표를 작성하지 않는 경우가 있음).
 
     Args:
         corp_code: 기업코드 (8자리)
@@ -264,17 +341,41 @@ async def dart_full_financial_statements(
         fs_div: 재무제표구분 (CFS=연결, OFS=개별)
         sj_div: 특정 표만 필터 (BS=재무상태표, IS=손익계산서, CIS=포괄손익, CF=현금흐름, SCE=자본변동, 비워두면 전체)
     """
-    data = await _dart().get_full_financial_statements(
+    v.validate_corp_code(corp_code)
+    v.validate_year(bsns_year)
+    v.validate_report_code(reprt_code)
+    v.validate_fs_div(fs_div)
+    v.validate_sj_div(sj_div)
+
+    client = _dart()
+    data = await client.get_full_financial_statements(
         corp_code, bsns_year, reprt_code, fs_div
     )
     rows = data.get("list", []) or []
+
+    # CFS가 비어있으면 OFS로 폴백 (소규모 기업 대응)
+    fallback_used = False
+    if not rows and fs_div == "CFS":
+        logger.info("CFS empty, falling back to OFS: %s/%s", corp_code, bsns_year)
+        data = await client.get_full_financial_statements(
+            corp_code, bsns_year, reprt_code, "OFS"
+        )
+        rows = data.get("list", []) or []
+        fallback_used = True
+
     if sj_div:
         rows = [r for r in rows if r.get("sj_div") == sj_div]
+
     items = [_compact_fin_row(r) for r in rows]
+
+    if fallback_used:
+        # LLM에게 폴백 사실을 알림
+        return _json({"note": "CFS 데이터 없음 - OFS(개별재무제표)로 폴백", "list": items})
     return _json(items)
 
 
 @mcp.tool()
+@_tool_safe
 async def dart_multi_company_financials(
     corp_codes: list[str],
     bsns_year: str,
@@ -283,12 +384,17 @@ async def dart_multi_company_financials(
     """여러 회사의 주요 재무계정을 한번에 비교 조회합니다.
 
     경쟁사 비교, 동종업계 분석에 활용. 최대 20개 기업까지 가능.
+    20개 초과 시 에러를 반환하므로 사전에 분할해 호출하세요.
 
     Args:
-        corp_codes: 기업코드 리스트 (최대 20개)
+        corp_codes: 기업코드 리스트 (1~20개)
         bsns_year: 사업연도 (YYYY)
         reprt_code: 보고서코드 (11011=사업보고서 등)
     """
+    v.validate_corp_codes_list(corp_codes)
+    v.validate_year(bsns_year)
+    v.validate_report_code(reprt_code)
+
     data = await _dart().get_multi_company_financials(corp_codes, bsns_year, reprt_code)
     items = [_compact_fin_row(r) for r in data.get("list", []) or []]
     return _json(items)
@@ -300,6 +406,7 @@ async def dart_multi_company_financials(
 
 
 @mcp.tool()
+@_tool_safe
 async def fisis_list_statistics(
     lrg_div: str = "",
     sml_div: str = "",
@@ -318,6 +425,7 @@ async def fisis_list_statistics(
 
 
 @mcp.tool()
+@_tool_safe
 async def fisis_get_statistics(
     stat_cd: str,
     strt_yymm: str,
@@ -338,6 +446,15 @@ async def fisis_get_statistics(
         lrg_div: 대분류 코드
         sml_div: 소분류 코드
     """
+    if not stat_cd:
+        raise ValueError("stat_cd는 필수입니다. fisis_list_statistics 로 먼저 확인하세요.")
+    v.validate_yyyymm(strt_yymm, "strt_yymm")
+    v.validate_yyyymm(end_yymm, "end_yymm")
+    if strt_yymm > end_yymm:
+        raise ValueError(
+            f"strt_yymm({strt_yymm})은 end_yymm({end_yymm}) 이하여야 합니다"
+        )
+
     data = await _fisis().get_statistics(
         stat_cd, strt_yymm, end_yymm, finance_cd, lrg_div, sml_div
     )
@@ -345,6 +462,7 @@ async def fisis_get_statistics(
 
 
 @mcp.tool()
+@_tool_safe
 async def fisis_list_companies(
     lrg_div: str = "",
     sml_div: str = "",
@@ -369,6 +487,7 @@ async def fisis_list_companies(
 
 
 @mcp.tool()
+@_tool_safe
 async def get_api_reference() -> str:
     """DART·FISIS API 코드 참조표와 사용 예시를 반환합니다.
 

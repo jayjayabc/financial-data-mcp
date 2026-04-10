@@ -1,6 +1,12 @@
-"""DART(전자공시시스템) OpenAPI 클라이언트
+"""DART(전자공시시스템) OpenAPI 클라이언트.
 
 API 문서: https://opendart.fss.or.kr/guide/main.do
+
+주요 최적화:
+- 싱글톤 재사용 전제: 인스턴스 내부에 httpx.AsyncClient, 응답 캐시, 기업코드 캐시 보관
+- 기업코드: 메모리 → 디스크(30일) → 네트워크 순으로 조회 (8MB 재다운로드 방지)
+- 응답 캐시: 재무제표 등 변동 적은 조회는 1시간 TTL 메모리 캐시
+- DART 에러코드 '013'(조회 결과 없음)을 예외가 아닌 빈 결과로 처리
 """
 
 from __future__ import annotations
@@ -8,10 +14,16 @@ from __future__ import annotations
 import io
 import xml.etree.ElementTree as ET
 import zipfile
+from typing import Any
 
 import httpx
 
+from ._cache import TTLCache, load_disk_cache, save_disk_cache
+
 BASE_URL = "https://opendart.fss.or.kr/api"
+CORP_CODE_CACHE_NAME = "dart_corp_codes"
+CORP_CODE_TTL_SECONDS = 30 * 86400  # 30일
+RESPONSE_TTL_SECONDS = 3600  # 1시간
 
 # 보고서 코드
 REPORT_CODES = {
@@ -29,83 +41,132 @@ CORP_CLASS = {
     "기타": "E",
 }
 
+# 재무제표 구분 (sj_div)
+SJ_DIV = {
+    "BS": "재무상태표",
+    "IS": "손익계산서",
+    "CIS": "포괄손익계산서",
+    "CF": "현금흐름표",
+    "SCE": "자본변동표",
+}
+
 
 class DartClient:
-    """DART OpenAPI 비동기 클라이언트"""
+    """DART OpenAPI 비동기 클라이언트.
+
+    이 클래스는 싱글톤으로 재사용되어야 함 (server.py 의 lru_cache 참고).
+    매 호출마다 인스턴스를 생성하면 내부 캐시와 HTTP 커넥션 재사용 효과가 사라짐.
+    """
 
     def __init__(self, api_key: str) -> None:
         self.api_key = api_key
         self._corp_codes: list[dict] | None = None
+        self._client = httpx.AsyncClient(
+            base_url=BASE_URL,
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            headers={"User-Agent": "financial-data-mcp/0.1"},
+        )
+        self._response_cache = TTLCache(
+            ttl_seconds=RESPONSE_TTL_SECONDS, max_size=256
+        )
 
-    # ── 내부 헬퍼 ──────────────────────────────────────────────
+    async def aclose(self) -> None:
+        """내부 httpx 클라이언트 종료."""
+        await self._client.aclose()
 
-    async def _get(self, endpoint: str, params: dict | None = None) -> dict:
-        params = params or {}
+    # ── 내부 HTTP 헬퍼 ─────────────────────────────────────────
+
+    async def _get(
+        self,
+        endpoint: str,
+        params: dict | None = None,
+        use_cache: bool = False,
+    ) -> dict:
+        params = dict(params or {})
         params["crtfc_key"] = self.api_key
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(f"{BASE_URL}/{endpoint}", params=params)
-            resp.raise_for_status()
-            data = resp.json()
-        # DART 오류 처리
+
+        cache_key: tuple | None = None
+        if use_cache:
+            cache_key = (endpoint, tuple(sorted(params.items())))
+            cached = self._response_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        resp = await self._client.get(f"/{endpoint}", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+
         status = data.get("status", "000")
-        if status not in ("000", None):
+        if status == "013":
+            # 조회 결과 없음 - 정상 응답으로 처리 (빈 리스트 보장)
+            data.setdefault("list", [])
+            data["message"] = data.get("message", "조회된 데이터가 없습니다")
+        elif status not in ("000", None):
             msg = data.get("message", "알 수 없는 오류")
             raise RuntimeError(f"DART API 오류 [{status}]: {msg}")
+
+        if cache_key is not None:
+            self._response_cache.set(cache_key, data)
         return data
 
-    # ── 기업코드 검색 ──────────────────────────────────────────
+    # ── 기업코드 ───────────────────────────────────────────────
 
     async def load_corp_codes(self) -> list[dict]:
-        """기업코드 목록(corpCode.xml)을 다운로드하고 캐싱합니다."""
+        """기업코드 목록 로드. 메모리 → 디스크(30일) → 네트워크 순."""
         if self._corp_codes is not None:
             return self._corp_codes
 
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.get(
-                f"{BASE_URL}/corpCode.xml",
-                params={"crtfc_key": self.api_key},
-            )
-            resp.raise_for_status()
+        # 디스크 캐시 시도
+        cached = load_disk_cache(CORP_CODE_CACHE_NAME, CORP_CODE_TTL_SECONDS)
+        if isinstance(cached, list) and cached:
+            self._corp_codes = cached
+            return cached
+
+        # 네트워크 다운로드 (약 8MB ZIP)
+        resp = await self._client.get(
+            "/corpCode.xml",
+            params={"crtfc_key": self.api_key},
+            timeout=60.0,
+        )
+        resp.raise_for_status()
 
         with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
             xml_name = zf.namelist()[0]
             xml_data = zf.read(xml_name)
 
         root = ET.fromstring(xml_data)
-        corps = []
+        corps: list[dict] = []
         for item in root.iter("list"):
             corps.append(
                 {
                     "corp_code": item.findtext("corp_code", ""),
                     "corp_name": item.findtext("corp_name", ""),
-                    "stock_code": item.findtext("stock_code", ""),
+                    "stock_code": (item.findtext("stock_code", "") or "").strip(),
                     "modify_date": item.findtext("modify_date", ""),
                 }
             )
+
         self._corp_codes = corps
+        save_disk_cache(CORP_CODE_CACHE_NAME, corps)
         return corps
 
     async def search_company(self, name: str, limit: int = 20) -> list[dict]:
-        """회사명으로 기업코드를 검색합니다.
-
-        상장기업(stock_code 있는 기업)이 우선 표시됩니다.
-        """
+        """회사명 부분일치 검색. 상장기업 우선 정렬."""
         corps = await self.load_corp_codes()
         matches = [c for c in corps if name in c["corp_name"]]
-        # 상장기업 우선 정렬
         matches.sort(key=lambda c: (c["stock_code"] == "", c["corp_name"]))
         return matches[:limit]
 
     # ── 기업개황 ───────────────────────────────────────────────
 
     async def get_company_overview(self, corp_code: str) -> dict:
-        """기업개황을 조회합니다.
+        return await self._get(
+            "company.json",
+            {"corp_code": corp_code},
+            use_cache=True,
+        )
 
-        반환: 회사명, 대표자, 업종, 주소, 설립일, 상장일, 홈페이지 등
-        """
-        return await self._get("company.json", {"corp_code": corp_code})
-
-    # ── 공시 검색 ──────────────────────────────────────────────
+    # ── 공시 ───────────────────────────────────────────────────
 
     async def search_disclosures(
         self,
@@ -117,17 +178,6 @@ class DartClient:
         page_no: int = 1,
         page_count: int = 10,
     ) -> dict:
-        """공시 목록을 검색합니다.
-
-        Args:
-            corp_code: 기업코드 (8자리)
-            bgn_de: 검색 시작일 (YYYYMMDD)
-            end_de: 검색 종료일 (YYYYMMDD)
-            corp_cls: 법인구분 (Y=유가, K=코스닥, N=코넥스, E=기타)
-            pblntf_ty: 공시유형 (A=정기공시, B=주요사항, C=발행공시 등)
-            page_no: 페이지 번호
-            page_count: 페이지당 건수 (최대 100)
-        """
         params: dict = {"page_no": str(page_no), "page_count": str(page_count)}
         if corp_code:
             params["corp_code"] = corp_code
@@ -139,6 +189,7 @@ class DartClient:
             params["corp_cls"] = corp_cls
         if pblntf_ty:
             params["pblntf_ty"] = pblntf_ty
+        # 공시는 최신 정보 필요성이 높아 캐시하지 않음
         return await self._get("list.json", params)
 
     # ── 재무제표 ───────────────────────────────────────────────
@@ -149,15 +200,6 @@ class DartClient:
         bsns_year: str,
         reprt_code: str = "11011",
     ) -> dict:
-        """단일회사 주요계정을 조회합니다.
-
-        주요계정: 자산총계, 부채총계, 자본총계, 매출액, 영업이익, 당기순이익 등
-
-        Args:
-            corp_code: 기업코드 (8자리)
-            bsns_year: 사업연도 (YYYY)
-            reprt_code: 보고서코드 (11011=사업보고서, 11012=반기, 11013=1분기, 11014=3분기)
-        """
         return await self._get(
             "fnlttSinglAcnt.json",
             {
@@ -165,6 +207,7 @@ class DartClient:
                 "bsns_year": bsns_year,
                 "reprt_code": reprt_code,
             },
+            use_cache=True,
         )
 
     async def get_full_financial_statements(
@@ -174,14 +217,6 @@ class DartClient:
         reprt_code: str = "11011",
         fs_div: str = "CFS",
     ) -> dict:
-        """단일회사 전체 재무제표를 조회합니다.
-
-        Args:
-            corp_code: 기업코드 (8자리)
-            bsns_year: 사업연도 (YYYY)
-            reprt_code: 보고서코드
-            fs_div: 재무제표구분 (CFS=연결, OFS=개별)
-        """
         return await self._get(
             "fnlttSinglAcntAll.json",
             {
@@ -190,6 +225,7 @@ class DartClient:
                 "reprt_code": reprt_code,
                 "fs_div": fs_div,
             },
+            use_cache=True,
         )
 
     async def get_multi_company_financials(
@@ -198,13 +234,6 @@ class DartClient:
         bsns_year: str,
         reprt_code: str = "11011",
     ) -> dict:
-        """다중회사 주요계정을 비교 조회합니다.
-
-        Args:
-            corp_codes: 기업코드 리스트 (최대 20개)
-            bsns_year: 사업연도 (YYYY)
-            reprt_code: 보고서코드
-        """
         return await self._get(
             "fnlttMultiAcnt.json",
             {
@@ -212,4 +241,5 @@ class DartClient:
                 "bsns_year": bsns_year,
                 "reprt_code": reprt_code,
             },
+            use_cache=True,
         )

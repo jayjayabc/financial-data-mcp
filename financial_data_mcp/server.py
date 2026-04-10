@@ -1,54 +1,61 @@
-"""DART & FISIS 금융 데이터 MCP 서버
+"""DART & FISIS 금융 데이터 MCP 서버.
 
 DART(전자공시시스템)과 FISIS(금융통계정보시스템) API를 통해
-기업 공시, 재무제표, 금융통계 데이터를 조회·분석하는 MCP 서버입니다.
+기업 공시, 재무제표, 금융통계 데이터를 조회·분석합니다.
 
 사용법:
     # 직접 실행
     python -m financial_data_mcp
 
-    # Claude Desktop 설정 (claude_desktop_config.json)
+    # Claude Code / Desktop 설정 예시
     {
-        "mcpServers": {
-            "financial-data": {
-                "command": "uv",
-                "args": ["--directory", "/path/to/fisis-app", "run", "financial-data-mcp"],
-                "env": {
-                    "DART_API_KEY": "your-dart-api-key",
-                    "FISIS_API_KEY": "your-fisis-api-key"
-                }
-            }
+      "mcpServers": {
+        "financial-data": {
+          "command": "uv",
+          "args": ["--directory", "/path/to/fisis-app", "run", "financial-data-mcp"]
         }
+      }
     }
 
 환경변수:
-    DART_API_KEY: DART OpenAPI 인증키 (https://opendart.fss.or.kr 에서 발급)
-    FISIS_API_KEY: FISIS OpenAPI 인증키 (https://fisis.fss.or.kr 에서 발급)
+    DART_API_KEY: DART OpenAPI 인증키 (https://opendart.fss.or.kr)
+    FISIS_API_KEY: FISIS OpenAPI 인증키 (https://fisis.fss.or.kr)
+
+    서버 기동 시 프로젝트 루트의 .env 파일을 자동 로드합니다.
 """
 
 from __future__ import annotations
 
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
-# 프로젝트 루트의 .env 파일에서 API 키 자동 로드
+# 프로젝트 루트의 .env 자동 로드 (있을 경우)
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from .dart_client import DartClient, REPORT_CODES, CORP_CLASS
-from .fisis_client import FisisClient, LARGE_DIVISIONS
+from .dart_client import CORP_CLASS, REPORT_CODES, SJ_DIV, DartClient
+from .fisis_client import LARGE_DIVISIONS, FisisClient
 
 mcp = FastMCP(
     "financial-data",
-    instructions="DART(전자공시시스템)과 FISIS(금융통계정보시스템) 금융 데이터 조회·분석 MCP 서버",
+    instructions=(
+        "DART(전자공시시스템)과 FISIS(금융통계정보시스템) 금융 데이터 조회·분석. "
+        "한국 기업의 공시·재무제표·금융통계를 조회합니다."
+    ),
 )
 
 
-# ── 클라이언트 팩토리 ─────────────────────────────────────────────
+# ── 클라이언트 싱글톤 ───────────────────────────────────────────
+# lru_cache(maxsize=1)로 프로세스 생애 동안 단일 인스턴스 유지.
+# 이렇게 해야 기업코드 캐시, HTTP 커넥션, 응답 캐시가 모두 재사용됨.
 
+
+@lru_cache(maxsize=1)
 def _dart() -> DartClient:
     key = os.environ.get("DART_API_KEY", "")
     if not key:
@@ -59,6 +66,7 @@ def _dart() -> DartClient:
     return DartClient(key)
 
 
+@lru_cache(maxsize=1)
 def _fisis() -> FisisClient:
     key = os.environ.get("FISIS_API_KEY", "")
     if not key:
@@ -69,8 +77,70 @@ def _fisis() -> FisisClient:
     return FisisClient(key)
 
 
-def _json(data: object) -> str:
-    return json.dumps(data, ensure_ascii=False, indent=2)
+# ── 직렬화 / 응답 가공 ──────────────────────────────────────────
+
+
+def _json(data: Any) -> str:
+    """토큰 절약형 JSON 직렬화 (공백 없음)."""
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+
+def _drop_empty(d: dict) -> dict:
+    """None/빈 문자열 필드 제거로 추가 토큰 절약."""
+    return {k: v for k, v in d.items() if v not in (None, "")}
+
+
+def _compact_disclosure(item: dict) -> dict:
+    """공시 항목에서 필수 필드만 추출."""
+    return _drop_empty(
+        {
+            "rcept_no": item.get("rcept_no"),
+            "rcept_dt": item.get("rcept_dt"),
+            "corp_name": item.get("corp_name"),
+            "corp_code": item.get("corp_code"),
+            "stock_code": item.get("stock_code"),
+            "report_nm": item.get("report_nm"),
+            "flr_nm": item.get("flr_nm"),
+            "rm": item.get("rm"),
+        }
+    )
+
+
+def _compact_fin_row(item: dict) -> dict:
+    """재무계정 행에서 필수 필드만 추출 (토큰 ~60% 절감)."""
+    return _drop_empty(
+        {
+            "corp_code": item.get("corp_code"),  # 다중회사에서만 의미있음
+            "fs_div": item.get("fs_div"),
+            "sj_div": item.get("sj_div"),
+            "sj_nm": item.get("sj_nm"),
+            "account_nm": item.get("account_nm"),
+            "curr": item.get("thstrm_amount"),
+            "prev": item.get("frmtrm_amount"),
+            "prev2": item.get("bfefrmtrm_amount"),
+        }
+    )
+
+
+def _fisis_extract_list(data: dict) -> Any:
+    """FISIS 응답에서 list를 방어적으로 추출.
+
+    엔드포인트마다 스키마가 달라 result 안팎을 모두 확인.
+    """
+    if not isinstance(data, dict):
+        return data
+    result = data.get("result")
+    if isinstance(result, dict):
+        for key in ("list", "data"):
+            value = result.get(key)
+            if isinstance(value, list):
+                return value
+        return result  # list 못 찾으면 result 전체 반환
+    for key in ("list", "data"):
+        value = data.get(key)
+        if isinstance(value, list):
+            return value
+    return data
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -80,35 +150,33 @@ def _json(data: object) -> str:
 
 @mcp.tool()
 async def dart_search_company(name: str, limit: int = 20) -> str:
-    """DART에서 회사명으로 기업코드(corp_code)를 검색합니다.
+    """회사명으로 DART 기업코드(corp_code)를 검색합니다.
 
-    다른 DART 도구를 사용하려면 먼저 이 도구로 corp_code를 조회하세요.
-    상장기업이 우선 표시됩니다.
+    다른 DART 도구의 선행 조건. 상장기업 우선 표시.
+    최초 호출 시 기업코드 목록(약 90,000건)을 다운로드하고 이후 재사용합니다.
 
     Args:
-        name: 검색할 회사명 (예: "삼성전자", "현대자동차")
+        name: 회사명 (예: "삼성전자", "현대자동차")
         limit: 최대 결과 수 (기본 20)
-
-    Returns:
-        기업코드, 회사명, 종목코드 목록 (JSON)
     """
     results = await _dart().search_company(name, limit)
     if not results:
         return f"'{name}'에 대한 검색 결과가 없습니다."
-    return _json(results)
+    return _json([_drop_empty(r) for r in results])
 
 
 @mcp.tool()
 async def dart_company_overview(corp_code: str) -> str:
-    """DART에서 기업개황(회사 기본정보)을 조회합니다.
+    """DART에서 기업개황을 조회합니다.
 
-    회사명, 대표자명, 법인구분, 업종, 주소, 설립일, 상장일, 홈페이지 등을 반환합니다.
+    회사명, 대표자명, 법인구분, 업종, 주소, 설립일, 상장일 등을 반환합니다.
 
     Args:
-        corp_code: 기업코드 (8자리, dart_search_company로 조회)
+        corp_code: 기업코드 (8자리, dart_search_company 로 조회)
     """
     data = await _dart().get_company_overview(corp_code)
-    return _json(data)
+    result = {k: v for k, v in data.items() if k not in ("status", "message")}
+    return _json(_drop_empty(result))
 
 
 @mcp.tool()
@@ -123,19 +191,16 @@ async def dart_search_disclosures(
 ) -> str:
     """DART에서 공시 목록을 검색합니다.
 
-    특정 기업의 공시를 검색하거나, 기간별·유형별로 전체 공시를 검색할 수 있습니다.
+    특정 기업의 공시를 검색하거나, 기간/유형별로 전체 공시를 검색할 수 있습니다.
 
     Args:
         corp_code: 기업코드 (8자리, 비워두면 전체)
         bgn_de: 검색 시작일 (YYYYMMDD, 예: "20240101")
         end_de: 검색 종료일 (YYYYMMDD, 예: "20241231")
         corp_cls: 법인구분 (Y=유가증권, K=코스닥, N=코넥스, E=기타)
-        pblntf_ty: 공시유형 (A=정기공시, B=주요사항보고, C=발행공시, D=지분공시, E=기타공시, F=외부감사, G=펀드, H=자산유동화, I=거래소공시, J=공정위공시)
-        page_no: 페이지 번호 (기본 1)
-        page_count: 페이지당 건수 (기본 10, 최대 100)
-
-    Returns:
-        공시 목록 (접수번호, 공시제목, 회사명, 공시일 등)
+        pblntf_ty: 공시유형 (A=정기공시, B=주요사항, C=발행, D=지분, E=기타, F=외부감사, G=펀드, H=자산유동화, I=거래소)
+        page_no: 페이지 번호
+        page_count: 페이지당 건수 (최대 100)
     """
     data = await _dart().search_disclosures(
         corp_code=corp_code,
@@ -146,7 +211,16 @@ async def dart_search_disclosures(
         page_no=page_no,
         page_count=page_count,
     )
-    return _json(data)
+    items = data.get("list", []) or []
+    result = _drop_empty(
+        {
+            "total_count": data.get("total_count"),
+            "total_page": data.get("total_page"),
+            "page_no": data.get("page_no"),
+            "list": [_compact_disclosure(it) for it in items],
+        }
+    )
+    return _json(result)
 
 
 @mcp.tool()
@@ -157,19 +231,17 @@ async def dart_financial_statements(
 ) -> str:
     """DART에서 단일회사의 주요 재무계정을 조회합니다.
 
-    자산총계, 부채총계, 자본총계, 매출액, 영업이익, 당기순이익 등
-    핵심 재무지표를 당기/전기/전전기 비교 형태로 반환합니다.
+    자산총계, 부채총계, 자본총계, 매출액, 영업이익, 당기순이익 등 핵심 지표를
+    당기/전기/전전기 비교 형태로 반환합니다.
 
     Args:
         corp_code: 기업코드 (8자리)
         bsns_year: 사업연도 (YYYY, 예: "2024")
-        reprt_code: 보고서코드 (11011=사업보고서, 11012=반기보고서, 11013=1분기보고서, 11014=3분기보고서)
-
-    Returns:
-        주요 재무계정 데이터 (연결/개별, 계정명, 당기/전기/전전기 금액)
+        reprt_code: 보고서코드 (11011=사업보고서, 11012=반기, 11013=1분기, 11014=3분기)
     """
     data = await _dart().get_financial_statements(corp_code, bsns_year, reprt_code)
-    return _json(data)
+    items = [_compact_fin_row(r) for r in data.get("list", []) or []]
+    return _json(items)
 
 
 @mcp.tool()
@@ -178,25 +250,28 @@ async def dart_full_financial_statements(
     bsns_year: str,
     reprt_code: str = "11011",
     fs_div: str = "CFS",
+    sj_div: str = "",
 ) -> str:
     """DART에서 단일회사의 전체 재무제표를 조회합니다.
 
-    재무상태표, 손익계산서, 포괄손익계산서, 현금흐름표의 전체 계정과목을 반환합니다.
-    dart_financial_statements보다 상세한 데이터가 필요할 때 사용하세요.
+    주요계정보다 상세한 데이터가 필요할 때 사용하세요.
+    sj_div 필터로 특정 표만 추출하면 토큰을 크게 절약할 수 있습니다.
 
     Args:
         corp_code: 기업코드 (8자리)
         bsns_year: 사업연도 (YYYY)
         reprt_code: 보고서코드 (11011=사업보고서, 11012=반기, 11013=1분기, 11014=3분기)
-        fs_div: 재무제표구분 (CFS=연결재무제표, OFS=개별재무제표)
-
-    Returns:
-        전체 재무제표 계정과목 데이터
+        fs_div: 재무제표구분 (CFS=연결, OFS=개별)
+        sj_div: 특정 표만 필터 (BS=재무상태표, IS=손익계산서, CIS=포괄손익, CF=현금흐름, SCE=자본변동, 비워두면 전체)
     """
     data = await _dart().get_full_financial_statements(
         corp_code, bsns_year, reprt_code, fs_div
     )
-    return _json(data)
+    rows = data.get("list", []) or []
+    if sj_div:
+        rows = [r for r in rows if r.get("sj_div") == sj_div]
+    items = [_compact_fin_row(r) for r in rows]
+    return _json(items)
 
 
 @mcp.tool()
@@ -205,20 +280,18 @@ async def dart_multi_company_financials(
     bsns_year: str,
     reprt_code: str = "11011",
 ) -> str:
-    """DART에서 여러 회사의 주요 재무계정을 한번에 비교 조회합니다.
+    """여러 회사의 주요 재무계정을 한번에 비교 조회합니다.
 
-    동일 업종 내 기업 비교, 경쟁사 분석 등에 활용하세요. 최대 20개 기업까지 가능합니다.
+    경쟁사 비교, 동종업계 분석에 활용. 최대 20개 기업까지 가능.
 
     Args:
-        corp_codes: 기업코드 리스트 (최대 20개, 예: ["00126380", "00164779"])
+        corp_codes: 기업코드 리스트 (최대 20개)
         bsns_year: 사업연도 (YYYY)
-        reprt_code: 보고서코드 (11011=사업보고서)
-
-    Returns:
-        다중회사 주요 재무계정 비교 데이터
+        reprt_code: 보고서코드 (11011=사업보고서 등)
     """
     data = await _dart().get_multi_company_financials(corp_codes, bsns_year, reprt_code)
-    return _json(data)
+    items = [_compact_fin_row(r) for r in data.get("list", []) or []]
+    return _json(items)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -233,18 +306,15 @@ async def fisis_list_statistics(
 ) -> str:
     """FISIS에서 조회 가능한 통계목록을 검색합니다.
 
-    어떤 통계데이터가 있는지 확인할 때 사용합니다.
-    통계코드(stat_cd)를 확인한 후 fisis_get_statistics로 데이터를 조회하세요.
+    어떤 통계가 있는지 확인할 때 사용. 통계코드(stat_cd)를 확인한 후
+    fisis_get_statistics 로 실제 데이터를 조회하세요.
 
     Args:
-        lrg_div: 대분류 코드 (01=은행, 02=비은행, 03=보험, 04=금융투자, 비워두면 전체)
-        sml_div: 소분류 코드 (비워두면 전체)
-
-    Returns:
-        통계목록 (통계코드, 통계명, 분류 등)
+        lrg_div: 대분류 (01=은행, 02=비은행, 03=보험, 04=금융투자, 비워두면 전체)
+        sml_div: 소분류 (비워두면 전체)
     """
     data = await _fisis().list_statistics(lrg_div, sml_div)
-    return _json(data)
+    return _json(_fisis_extract_list(data))
 
 
 @mcp.tool()
@@ -258,24 +328,20 @@ async def fisis_get_statistics(
 ) -> str:
     """FISIS에서 금융통계 데이터를 조회합니다.
 
-    특정 통계코드의 실제 데이터를 기간별로 조회합니다.
-    통계코드는 fisis_list_statistics로 먼저 확인하세요.
+    통계코드는 fisis_list_statistics 로 먼저 확인하세요.
 
     Args:
-        stat_cd: 통계코드 (예: "010101")
+        stat_cd: 통계코드
         strt_yymm: 조회 시작월 (YYYYMM, 예: "202401")
         end_yymm: 조회 종료월 (YYYYMM, 예: "202412")
-        finance_cd: 금융회사코드 (비워두면 전체 회사)
+        finance_cd: 금융회사코드 (비워두면 전체)
         lrg_div: 대분류 코드
         sml_div: 소분류 코드
-
-    Returns:
-        통계 데이터 (기간, 회사, 계정, 금액 등)
     """
     data = await _fisis().get_statistics(
         stat_cd, strt_yymm, end_yymm, finance_cd, lrg_div, sml_div
     )
-    return _json(data)
+    return _json(_fisis_extract_list(data))
 
 
 @mcp.tool()
@@ -286,46 +352,47 @@ async def fisis_list_companies(
 ) -> str:
     """FISIS에 등록된 금융회사 목록을 조회합니다.
 
-    특정 권역(은행, 비은행 등)의 금융회사 목록과 코드를 확인할 때 사용합니다.
-    금융회사코드(finance_cd)를 확인한 후 fisis_get_statistics에서 활용하세요.
+    특정 권역의 회사 목록과 finance_cd 를 확인할 때 사용.
 
     Args:
-        lrg_div: 대분류 코드 (01=은행, 02=비은행, 03=보험, 04=금융투자, 비워두면 전체)
-        sml_div: 소분류 코드 (비워두면 전체)
+        lrg_div: 대분류 (01=은행, 02=비은행, 03=보험, 04=금융투자)
+        sml_div: 소분류
         finance_cd: 금융회사코드 (특정 회사만 조회 시)
-
-    Returns:
-        금융회사 목록 (회사코드, 회사명 등)
     """
     data = await _fisis().list_companies(lrg_div, sml_div, finance_cd)
-    return _json(data)
+    return _json(_fisis_extract_list(data))
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  참조 정보 도구
+#  참조 정보
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
 @mcp.tool()
 async def get_api_reference() -> str:
-    """DART·FISIS API에서 자주 사용하는 코드 참조표를 반환합니다.
+    """DART·FISIS API 코드 참조표와 사용 예시를 반환합니다.
 
-    보고서코드, 법인구분, 대분류코드 등 API 파라미터에 필요한 코드를 확인할 수 있습니다.
+    보고서코드, 법인구분, 재무제표 표 구분, 대분류 코드 등
+    API 파라미터에 필요한 코드를 한 번에 확인할 수 있습니다.
     """
     ref = {
-        "DART_보고서코드": REPORT_CODES,
-        "DART_법인구분": CORP_CLASS,
-        "FISIS_대분류": LARGE_DIVISIONS,
-        "사용_예시": {
-            "삼성전자_재무제표_조회_순서": [
-                "1. dart_search_company(name='삼성전자') → corp_code 확인",
-                "2. dart_financial_statements(corp_code='00126380', bsns_year='2024') → 주요계정",
-                "3. dart_full_financial_statements(corp_code='00126380', bsns_year='2024', fs_div='CFS') → 전체 연결재무제표",
+        "DART_REPORT": REPORT_CODES,
+        "DART_CORP_CLASS": CORP_CLASS,
+        "DART_SJ_DIV": SJ_DIV,
+        "FISIS_LARGE_DIV": LARGE_DIVISIONS,
+        "examples": {
+            "samsung_income_statement": [
+                "1. dart_search_company(name='삼성전자') -> corp_code=00126380",
+                "2. dart_full_financial_statements(corp_code='00126380', bsns_year='2024', sj_div='IS')",
             ],
-            "은행_통계_조회_순서": [
-                "1. fisis_list_statistics(lrg_div='01') → 은행 통계목록 확인",
-                "2. fisis_list_companies(lrg_div='01') → 은행 회사목록 확인",
-                "3. fisis_get_statistics(stat_cd='010101', strt_yymm='202401', end_yymm='202412') → 데이터 조회",
+            "peer_comparison": [
+                "1. dart_search_company 로 corp_code 2~20개 수집",
+                "2. dart_multi_company_financials(corp_codes=[...], bsns_year='2024')",
+            ],
+            "bank_stats": [
+                "1. fisis_list_statistics(lrg_div='01')",
+                "2. fisis_list_companies(lrg_div='01')",
+                "3. fisis_get_statistics(stat_cd='<확인한코드>', strt_yymm='202401', end_yymm='202412')",
             ],
         },
     }
@@ -338,7 +405,7 @@ async def get_api_reference() -> str:
 
 
 def main() -> None:
-    """MCP 서버를 시작합니다."""
+    """MCP 서버를 stdio 모드로 시작합니다."""
     mcp.run()
 
 

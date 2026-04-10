@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "financial-data": {
+      "command": "uv",
+      "args": ["--directory", ".", "run", "financial-data-mcp"]
+    }
+  }
+}

@@ -30,8 +30,13 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+
+# 프로젝트 루트의 .env 파일에서 API 키 자동 로드
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from .dart_client import DartClient, REPORT_CODES, CORP_CLASS
 from .fisis_client import FisisClient, LARGE_DIVISIONS

@@ -11,8 +11,11 @@
 - python-dotenv - 환경변수 관리
 
 ## 구조
-- `app.py` - 전체 앱 로직 (단일 파일)
+- `app.py` - Streamlit 대시보드 앱
 - `data/` - FISIS Excel 데이터 (git 미추적, 100MB+ 파일)
+- `db/` - DuckDB 로더 모듈
+- `llm/` - LLM 프롬프트 및 SQL 생성
+- `financial_data_mcp/` - DART & FISIS MCP 서버 패키지
 - `.env` - API 키 (git 미추적)
 
 ## 데이터
@@ -27,6 +30,16 @@
 
 ## 실행
 ```bash
+# Streamlit 대시보드
 source venv/Scripts/activate
 streamlit run app.py
+
+# MCP 서버 (Claude Desktop / Claude Code에서 사용)
+uv run financial-data-mcp
+# 또는: python -m financial_data_mcp
 ```
+
+## MCP 서버
+- DART_API_KEY, FISIS_API_KEY 환경변수 필요
+- pyproject.toml에 패키지 설정 포함
+- Claude Desktop claude_desktop_config.json에서 설정하여 사용

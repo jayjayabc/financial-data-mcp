@@ -77,3 +77,90 @@ streamlit run app.py
 | 📈 차트 분석 | 자산 포트폴리오 막대/레이더/테이블 |
 | 🤖 AI 챗봇 | Claude API 기반 자유 질문 |
 | ⬇️ 엑셀 다운로드 | 원하는 시트 선택 후 다운로드 |
+
+---
+
+## 🔌 MCP 서버 (DART & FISIS)
+
+Claude Desktop / Claude Code에서 DART(전자공시시스템)과 FISIS(금융통계정보시스템) 데이터를 직접 조회·분석할 수 있는 MCP 서버입니다.
+
+### API 키 발급
+
+| 시스템 | 발급 URL | 환경변수 |
+|--------|----------|----------|
+| DART | https://opendart.fss.or.kr | `DART_API_KEY` |
+| FISIS | https://fisis.fss.or.kr | `FISIS_API_KEY` |
+
+### 설치 & 실행
+
+```bash
+# uv 사용 (권장)
+uv pip install .
+
+# 또는 pip
+pip install .
+
+# 실행
+financial-data-mcp
+# 또는
+python -m financial_data_mcp
+```
+
+### Claude Desktop 설정
+
+`claude_desktop_config.json`에 아래 내용을 추가합니다:
+
+```json
+{
+  "mcpServers": {
+    "financial-data": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/fisis-app", "run", "financial-data-mcp"],
+      "env": {
+        "DART_API_KEY": "your-dart-api-key",
+        "FISIS_API_KEY": "your-fisis-api-key"
+      }
+    }
+  }
+}
+```
+
+### 제공 도구 (10개)
+
+**DART (전자공시시스템)**
+
+| 도구 | 설명 |
+|------|------|
+| `dart_search_company` | 회사명으로 기업코드(corp_code) 검색 |
+| `dart_company_overview` | 기업개황 (대표자, 업종, 주소 등) |
+| `dart_search_disclosures` | 공시 목록 검색 (기간별, 유형별) |
+| `dart_financial_statements` | 단일회사 주요 재무계정 (자산, 부채, 매출 등) |
+| `dart_full_financial_statements` | 전체 재무제표 (재무상태표, 손익계산서 등) |
+| `dart_multi_company_financials` | 다중회사 재무 비교 (최대 20개) |
+
+**FISIS (금융통계정보시스템)**
+
+| 도구 | 설명 |
+|------|------|
+| `fisis_list_statistics` | 조회 가능한 통계목록 검색 |
+| `fisis_get_statistics` | 금융통계 데이터 조회 (기간별) |
+| `fisis_list_companies` | 금융회사 목록 조회 |
+
+**유틸리티**
+
+| 도구 | 설명 |
+|------|------|
+| `get_api_reference` | API 코드 참조표 (보고서코드, 분류코드 등) |
+
+### 사용 예시
+
+```
+"삼성전자 2024년 사업보고서 재무제표 보여줘"
+→ dart_search_company → dart_financial_statements
+
+"국내은행 2024년 자산 통계 비교해줘"
+→ fisis_list_statistics → fisis_get_statistics
+
+"현대자동차와 기아 재무 비교 분석해줘"
+→ dart_search_company (x2) → dart_multi_company_financials
+```

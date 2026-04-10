@@ -38,7 +38,7 @@ from .fisis_client import FisisClient, LARGE_DIVISIONS
 
 mcp = FastMCP(
     "financial-data",
-    description="DART(전자공시시스템)과 FISIS(금융통계정보시스템) 금융 데이터 조회·분석 MCP 서버",
+    instructions="DART(전자공시시스템)과 FISIS(금융통계정보시스템) 금융 데이터 조회·분석 MCP 서버",
 )
 
 

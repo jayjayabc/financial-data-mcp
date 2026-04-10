@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from financial_data_mcp._quota import QuotaTracker
 from financial_data_mcp.dart_client import DartClient
 
 
@@ -43,8 +44,10 @@ def _make_bytes_response(content: bytes) -> MagicMock:
 
 
 @pytest.fixture
-async def dart_client():
+async def dart_client(tmp_path):
     client = DartClient("test-key")
+    # 실제 ~/.cache 파일 오염 방지: 임시 quota 파일로 교체
+    client.quota = QuotaTracker(quota_file=tmp_path / "quota.json")
     # 디스크 캐시 자동 우회 (테스트마다 network path 타도록)
     with (
         patch("financial_data_mcp.dart_client.load_disk_cache", return_value=None),

@@ -23,6 +23,7 @@ import httpx
 
 from ._cache import TTLCache, load_disk_cache, save_disk_cache
 from ._http import mask_params, translate_http_error, with_retry
+from ._quota import QuotaTracker
 
 logger = logging.getLogger("financial_data_mcp.dart")
 
@@ -77,6 +78,7 @@ class DartClient:
         self._response_cache = TTLCache(
             ttl_seconds=RESPONSE_TTL_SECONDS, max_size=256
         )
+        self.quota = QuotaTracker()
 
     async def aclose(self) -> None:
         """내부 httpx 클라이언트 종료."""
@@ -85,7 +87,7 @@ class DartClient:
     # ── 내부 HTTP 헬퍼 ─────────────────────────────────────────
 
     async def _raw_get(self, path: str, params: dict, *, timeout: float | None = None) -> httpx.Response:
-        """재시도 + 상태 검사를 포함한 원시 GET."""
+        """재시도 + 상태 검사를 포함한 원시 GET. 성공 시 quota 카운터 증가."""
         async def _do() -> httpx.Response:
             kwargs = {"params": params}
             if timeout is not None:
@@ -95,9 +97,13 @@ class DartClient:
             return resp
 
         try:
-            return await with_retry(_do, label=f"DART {path}")
+            resp = await with_retry(_do, label=f"DART {path}")
         except (httpx.HTTPStatusError, httpx.TransportError, httpx.TimeoutException) as e:
             raise translate_http_error("DART", e) from e
+
+        # 성공한 네트워크 호출만 quota 소비 (재시도 포함 1회로 카운트)
+        self.quota.increment()
+        return resp
 
     async def _get(
         self,

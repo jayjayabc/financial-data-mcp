@@ -42,8 +42,38 @@ from . import _validators as v
 from .dart_client import CORP_CLASS, REPORT_CODES, SJ_DIV, DartClient
 from .fisis_client import LARGE_DIVISIONS, FisisClient
 
-# 프로젝트 루트의 .env 자동 로드
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+def _load_env_file() -> None:
+    """프로젝트 루트의 .env 파일을 찾아 자동 로드.
+
+    탐색 순서 (먼저 찾은 것이 우선):
+    1. 패키지 부모 디렉토리 (editable install: project_root/.env)
+    2. 현재 작업 디렉토리 (사용자가 프로젝트 루트에서 실행한 경우)
+    3. python-dotenv find_dotenv: CWD 상위로 올라가며 탐색
+
+    비-editable 설치에서도 동작하도록 다중 경로 fallback 지원.
+    """
+    candidates = [
+        Path(__file__).resolve().parent.parent / ".env",
+        Path.cwd() / ".env",
+    ]
+    for path in candidates:
+        if path.is_file():
+            load_dotenv(path, override=False)
+            return
+
+    # 마지막 fallback: python-dotenv가 상위 디렉토리를 자동 탐색
+    try:
+        from dotenv import find_dotenv
+
+        found = find_dotenv(usecwd=True)
+        if found:
+            load_dotenv(found, override=False)
+    except Exception:
+        pass  # .env 없으면 OS 환경변수만 사용
+
+
+_load_env_file()
 
 # 로깅 설정 (stderr로 출력 - stdio MCP는 stdout을 프로토콜용으로 사용)
 _log_level = os.environ.get("LOG_LEVEL", "WARNING").upper()

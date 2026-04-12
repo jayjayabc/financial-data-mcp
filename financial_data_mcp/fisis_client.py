@@ -167,68 +167,24 @@ class FisisClient:
         if isinstance(result, dict):
             _check(result)
 
-    async def list_divisions(
+    def list_divisions(
         self,
-        lrg_div: str = "",
+        div_cd: str = "",
     ) -> list[dict[str, str]]:
-        """FISIS API에서 사용 가능한 업권 목록을 동적으로 조회.
+        """22개 전체 업권 코드 목록을 반환합니다 (API 호출 없음).
 
-        두 가지 소스를 결합합니다:
-        1. 정적 매핑(DIVISIONS): 22개 전체 업권 코드 (항상 포함)
-        2. companySearch 응답: 실제 API에서 세부 소분류(sml_div) 추출
+        정적 매핑 기반이므로 즉시 반환되며 API quota를 소비하지 않습니다.
+        특정 업권의 세부 소분류(sml_div)나 소속 금융회사를 알고 싶으면
+        list_companies(lrg_div=코드)를 호출하세요 (API 1회).
 
         Args:
-            lrg_div: 특정 업권만 조회 (예: A, C, H 등). 비워두면 전체.
-
-        Returns:
-            [{"div_cd": "A", "div_nm": "국내은행", "sml_div": "...", "sml_div_nm": "..."}, ...]
+            div_cd: 특정 업권만 조회 (예: A, C, H). 비워두면 전체 22개.
         """
-        divisions: list[dict[str, str]] = []
-
-        # 1) 정적 매핑에서 전체 업권 코드 포함
-        if lrg_div:
-            if lrg_div in DIVISIONS:
-                divisions.append({"div_cd": lrg_div, "div_nm": DIVISIONS[lrg_div]})
-        else:
-            for code, name in DIVISIONS.items():
-                divisions.append({"div_cd": code, "div_nm": name})
-
-        # 2) companySearch에서 세부 소분류 동적 추출 시도
-        try:
-            codes_to_query = [lrg_div] if lrg_div else sorted(COMPANY_DIVISIONS)
-            for code in codes_to_query:
-                if code not in COMPANY_DIVISIONS:
-                    continue
-                data = await self._get("companySearch.json", {"partDiv": code})
-                result = data.get("result", data) if isinstance(data, dict) else data
-                items: list = []
-                if isinstance(result, dict):
-                    items = result.get("list", result.get("data", []))
-                elif isinstance(result, list):
-                    items = result
-                if not isinstance(items, list):
-                    continue
-
-                seen: set[str] = set()
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    sml = item.get("sml_div", item.get("smlDiv", ""))
-                    sml_nm = item.get("sml_div_nm", item.get("smlDivNm", ""))
-                    if sml and sml not in seen:
-                        seen.add(sml)
-                        entry: dict[str, str] = {"div_cd": code, "div_nm": DIVISIONS.get(code, "")}
-                        entry["sml_div"] = sml
-                        if sml_nm:
-                            entry["sml_div_nm"] = sml_nm
-                        divisions.append(entry)
-        except Exception:
-            # API 호출 실패 시 정적 매핑만 반환
-            logger.debug("companySearch 동적 조회 실패, 정적 매핑만 반환")
-
-        # 업권 코드 → 소분류 순 정렬
-        divisions.sort(key=lambda d: (d.get("div_cd", ""), d.get("sml_div", "")))
-        return divisions
+        if div_cd:
+            if div_cd in DIVISIONS:
+                return [{"div_cd": div_cd, "div_nm": DIVISIONS[div_cd]}]
+            return []
+        return [{"div_cd": code, "div_nm": name} for code, name in DIVISIONS.items()]
 
     async def list_statistics(
         self,

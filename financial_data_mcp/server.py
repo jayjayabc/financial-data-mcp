@@ -693,41 +693,23 @@ async def dart_multi_company_financials(
 async def fisis_list_divisions(
     div_cd: str = "",
 ) -> str:
-    """FISIS API에서 사용 가능한 전체 업권(22개 권역 + 소분류) 목록을 조회합니다.
-
-    FISIS는 22개 개별 업권 코드를 지원합니다:
-    은행: A(국내은행), J(외국은행국내지점)
-    비은행: B(신탁), R(종합금융), E(상호저축은행), O(신용협동조합),
-            Q(새마을금고), P(농협), S(수협), M(산림조합)
-    보험: H(생명보험), I(손해보험)
-    여신전문: C(신용카드), K(리스), T(할부금융), N(신기술사업금융)
-    금융투자: F(증권), W(선물), G(자산운용), X(투자자문), D(부동산신탁)
-    기타: L(금융지주회사)
+    """FISIS에서 사용 가능한 전체 업권(22개) 목록을 반환합니다. API 호출 없이 즉시 반환.
 
     이 코드들을 fisis_list_statistics, fisis_get_statistics, fisis_list_companies의
     lrg_div 파라미터에 직접 사용하세요.
 
+    특정 업권 내 세부 소분류(sml_div)나 소속 금융회사를 알고 싶으면
+    fisis_list_companies(lrg_div=코드)를 호출하세요.
+
     Args:
         div_cd: 특정 업권만 조회 (예: A, C, H). 비워두면 전체 22개 업권.
     """
-    divisions = await _fisis().list_divisions(div_cd)
-    if not divisions:
-        # 정적 매핑 폴백
-        fallback: list[dict[str, str]] = []
-        if div_cd and div_cd in DIVISIONS:
-            fallback.append({"div_cd": div_cd, "div_nm": DIVISIONS[div_cd]})
-        else:
-            for code, name in DIVISIONS.items():
-                fallback.append({"div_cd": code, "div_nm": name})
-        return _json({
-            "divisions": fallback,
-            "groups": DIVISION_GROUPS,
-            "note": "API 동적 조회 실패. 정적 매핑(22개 업권 코드) 반환.",
-        })
+    divisions = _fisis().list_divisions(div_cd)
     return _json({
         "divisions": divisions,
         "count": len(divisions),
         "groups": DIVISION_GROUPS,
+        "tip": "세부 소분류/소속 금융회사 → fisis_list_companies(lrg_div=코드) 호출",
     })
 
 

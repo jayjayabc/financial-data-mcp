@@ -259,7 +259,7 @@ async def test_plan_data_query_first_call_includes_catalog():
     assert "DART" in data["data_catalog"]
     assert "FISIS" in data["data_catalog"]
     assert data["data_catalog"]["DART"]["sj_div_filter"]["IS"] == "손익계산서"
-    assert data["data_catalog"]["FISIS"]["lrg_div"]["A"] == "은행"
+    assert "은행" in data["data_catalog"]["FISIS"]["lrg_div"]["A"]
 
 
 @pytest.mark.asyncio

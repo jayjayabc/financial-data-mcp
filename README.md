@@ -4,46 +4,69 @@
 
 Claude Code / Claude Desktop에서 한국 기업의 공시·재무제표·금융통계를 자연어로 조회·분석합니다.
 
-> 💡 이 레포는 **MCP 서버**(`financial_data_mcp/`)와 **Streamlit 대시보드**(`app.py`) 두 가지 앱을 담고 있습니다. 아래는 MCP 서버 사용 가이드입니다. Streamlit 앱은 [Streamlit 대시보드](#-streamlit-대시보드-부가-기능) 섹션을 참고하세요.
-
 ---
 
 ## ✨ 특징
 
-- **11개 MCP 도구**로 한국 기업 데이터 풀스택 조회 (DART 6 + FISIS 3 + 운영/참조 2)
+- **11개 MCP 도구**로 한국 기업 데이터 풀스택 조회 (DART 6 + FISIS 3 + 운영 2)
 - **토큰 효율**: 컴팩트 JSON + `sj_div` 필터로 재무제표 응답 토큰 **75% 절감** 실측
 - **반복 사용 최적화**: 3단계 캐싱 (메모리 → 디스크 30일 → TTL 응답 캐시 1시간)
 - **동시성 안전**: `asyncio.Lock`으로 기업코드 8MB 중복 다운로드 방지
 - **자동 복구**: 503/429/transport 오류 지수 백오프 재시도 + CFS→OFS 자동 폴백
 - **입력 검증**: API 호출 전 사전 차단으로 quota·토큰 낭비 방지
 - **DART quota 트래킹**: 일일 20,000건 한도 실시간 추적
-- **148개 단위 테스트**로 모든 기능 커버
+- **149개 단위 테스트**로 모든 기능 커버
 
 ---
 
-## 🚀 빠른 시작
+## 🔑 API 키 발급 (사용 전 필수)
+
+이 MCP 서버는 금융감독원의 **공개 API**를 사용합니다. 무료이며 개인 발급이 필요합니다.
+
+### DART API 키 발급
+
+1. [opendart.fss.or.kr](https://opendart.fss.or.kr) 접속
+2. 우측 상단 **회원가입** → 로그인
+3. **마이페이지 → API 키 신청** → 용도 입력 후 즉시 발급
+4. 발급된 키를 복사해 둡니다
+
+> 일일 20,000건 무료. 개인 키이므로 타인과 공유하지 마세요.
+
+### FISIS API 키 발급
+
+1. [fisis.fss.or.kr](https://fisis.fss.or.kr) 접속
+2. 상단 메뉴 **오픈API → 이용신청**
+3. 회원가입 → 신청서 작성 → 승인 (보통 1~2일 소요)
+4. 승인 후 **마이페이지**에서 API 키 확인
+
+> 승인 전까지 API 호출이 안 됩니다. DART보다 시간이 걸립니다.
+
+---
+
+## 🚀 설치 및 설정
 
 ### 1. 클론 & 의존성 설치
 
 ```bash
-git clone https://github.com/jayjayabc/fisis-app.git
-cd fisis-app
-git checkout claude/financial-data-mcp-ZT9Yd  # MCP 브랜치
-
-# uv 권장
-uv pip install -e .
-
-# 또는 pip
+git clone https://github.com/jayjayabc/financial-data-mcp.git
+cd financial-data-mcp
 pip install -e .
 ```
 
 ### 2. API 키 설정
 
-`.env` 파일 생성 (`.env.example` 참고):
+프로젝트 루트에 `.env` 파일 생성:
 
 ```bash
-DART_API_KEY=your-dart-api-key    # https://opendart.fss.or.kr 에서 발급
-FISIS_API_KEY=your-fisis-api-key  # https://fisis.fss.or.kr 에서 발급
+DART_API_KEY=여기에_DART_API_키_입력
+FISIS_API_KEY=여기에_FISIS_API_키_입력
+```
+
+`.env.example` 파일을 복사해서 사용해도 됩니다:
+
+```bash
+cp .env.example .env
+# 텍스트 에디터로 .env를 열어 키 입력
 ```
 
 ### 3. 환경 검증 (⭐ 권장)
@@ -53,20 +76,34 @@ python scripts/preflight.py
 ```
 
 Python 버전, 패키지, API 키, 실제 DART/FISIS 접근 가능 여부까지 한 방에 진단합니다.
+10개 항목이 모두 `[ OK ]`로 나오면 준비 완료입니다.
 
-### 4. Claude Code / Desktop 연결
+### 4. Claude 연결
 
-**Claude Code CLI**: 프로젝트 루트에 `.mcp.json`이 이미 포함되어 있으므로 프로젝트 디렉토리에서 `claude` 실행만 하면 자동 인식됩니다.
+**Claude Code CLI** (권장):
 
 ```bash
-cd fisis-app
+# 프로젝트 루트에 .mcp.json이 포함되어 있어 자동 인식
+cd financial-data-mcp
 claude
 ```
 
-**Claude Desktop**: `claude_desktop_config.json`에 추가:
+또는 어느 폴더에서나 쓰고 싶다면 전역 등록:
 
-| OS | 경로 |
-|----|------|
+```bash
+claude mcp add financial-data \
+  -e DART_API_KEY=발급받은키 \
+  -e FISIS_API_KEY=발급받은키 \
+  --scope user \
+  python -- -m financial_data_mcp
+```
+
+**Claude Desktop**:
+
+`claude_desktop_config.json`에 추가 (`/absolute/path/to`를 실제 경로로 교체):
+
+| OS | 설정 파일 경로 |
+|----|--------------|
 | Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
 | macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 
@@ -74,20 +111,26 @@ claude
 {
   "mcpServers": {
     "financial-data": {
-      "command": "uv",
-      "args": ["--directory", "/absolute/path/to/fisis-app", "run", "financial-data-mcp"]
+      "command": "python",
+      "args": ["-m", "financial_data_mcp"],
+      "cwd": "/absolute/path/to/financial-data-mcp",
+      "env": {
+        "DART_API_KEY": "발급받은_DART_키",
+        "FISIS_API_KEY": "발급받은_FISIS_키"
+      }
     }
   }
 }
 ```
 
-> `.env` 파일이 프로젝트 루트에 있으면 API 키가 자동 로드됩니다. Claude Desktop config의 `env` 섹션에 직접 넣을 필요 없음.
+설정 후 Claude Desktop을 **재시작**하면 도구 아이콘이 활성화됩니다.
 
 ### 5. 테스트 질문
 
 ```
 "삼성전자 2024년 손익계산서 보여줘"
 "삼성전자, SK하이닉스, LG전자 2024년 영업이익 비교"
+"시중은행 2024년 판관비 추이 보여줘"
 "오늘 DART API 얼마나 썼어?"
 ```
 
@@ -97,7 +140,13 @@ claude
 
 ## 🛠️ 제공 MCP 도구 (11개)
 
-### DART 전자공시시스템
+### 플래닝
+
+| 도구 | 용도 |
+|------|------|
+| `plan_data_query` | 질문 분석 → DART/FISIS 중 최적 경로 선택 (항상 첫 번째로 호출) |
+
+### DART 전자공시시스템 (일반 기업)
 
 | 도구 | 용도 |
 |------|------|
@@ -108,20 +157,19 @@ claude
 | `dart_full_financial_statements` | 전체 재무제표 (`sj_div` 필터로 BS/IS/CF 선택) — **상세** |
 | `dart_multi_company_financials` | 다중 회사 비교 (최대 20개, 1회 호출) |
 
-### FISIS 금융통계정보시스템
+### FISIS 금융통계정보시스템 (금융업 업권 통계)
 
 | 도구 | 용도 |
 |------|------|
-| `fisis_list_statistics` | 통계 목록 검색 (대분류: 01=은행, 02=비은행, 03=보험, 04=금융투자) |
+| `fisis_list_statistics` | 통계 목록 검색 (대분류: A=은행, B=비은행, C=보험, D=금융투자) |
 | `fisis_get_statistics` | 통계 데이터 조회 (기간·회사·항목별) |
 | `fisis_list_companies` | 금융회사 목록 (권역별) |
 
-### 운영 / 참조
+### 운영
 
 | 도구 | 용도 |
 |------|------|
 | `dart_quota_status` | DART 일일 API quota 사용 현황 (20,000건/일) |
-| `get_api_reference` | 보고서코드·법인구분·재무제표 구분 등 코드 참조표 |
 
 ---
 
@@ -144,25 +192,19 @@ pip install -e ".[dev]"
 pytest tests/
 ```
 
-148개 테스트 통과 기대 (`test_cache` · `test_http` · `test_validators` · `test_quota` · `test_dart_client` · `test_fisis_client` · `test_server`).
+149개 테스트 통과 기대.
 
 ### 로컬 디버깅
 
 ```bash
-# 세부 로그로 MCP 서버 기동
 LOG_LEVEL=DEBUG python -m financial_data_mcp
-
-# 또는 uv로
-LOG_LEVEL=DEBUG uv run financial-data-mcp
 ```
 
 ### 프로젝트 구조
 
 ```
-fisis-app/
+financial-data-mcp/
 ├── financial_data_mcp/       ← MCP 서버 패키지
-│   ├── __init__.py
-│   ├── __main__.py           # python -m financial_data_mcp
 │   ├── server.py             # FastMCP 서버 + 11개 도구
 │   ├── dart_client.py        # DART OpenAPI 클라이언트
 │   ├── fisis_client.py       # FISIS OpenAPI 클라이언트
@@ -170,35 +212,32 @@ fisis-app/
 │   ├── _http.py              # 재시도 + HTTP 에러 변환
 │   ├── _quota.py             # DART quota 트래킹
 │   └── _validators.py        # 입력 검증
-├── tests/                    # 148개 단위 테스트
+├── tests/                    # 149개 단위 테스트
 ├── scripts/
 │   └── preflight.py          # 환경 검증 스크립트
 ├── docs/
 │   ├── USAGE.md
 │   └── TROUBLESHOOTING.md
 ├── .mcp.json                 # Claude Code 자동 인식용
-├── .env.example
-├── pyproject.toml
-│
-└── [Streamlit 앱 파일들]
-    ├── app.py                ← Streamlit 대시보드
-    ├── db/                   ← DuckDB 로더
-    ├── llm/                  ← Text-to-SQL 파이프라인
-    └── data/                 ← FISIS Excel (git 미추적)
+├── .env.example              # API 키 템플릿
+└── pyproject.toml
 ```
 
 ---
 
-## 📊 Streamlit 대시보드 (부가 기능)
+## ❓ FAQ
 
-레포에는 별도로 FISIS Excel 기반의 Streamlit 분석 대시보드가 포함되어 있습니다. MCP 서버와 독립적이며, 로컬에서 탐색적 분석용으로 사용합니다.
+**Q. API 키를 팀원과 공유해도 되나요?**
+A. 권장하지 않습니다. DART API는 개인당 일일 20,000건 한도이며, 공유 시 한도가 빠르게 소진됩니다. 팀원 각자가 개인 키를 발급받아 사용하세요.
 
-```bash
-source venv/Scripts/activate  # Windows
-streamlit run app.py
-```
+**Q. FISIS API 승인이 안 나요.**
+A. 신청 후 1~2 영업일 소요됩니다. 승인 전에는 preflight에서 `[FAIL]`로 표시되며 FISIS 관련 도구만 동작하지 않습니다. DART는 즉시 사용 가능합니다.
 
-자세한 내용은 이전 버전 README의 [Streamlit 섹션](https://github.com/jayjayabc/fisis-app/blob/master/README.md)을 참고하세요.
+**Q. 어떤 기업을 조회할 수 있나요?**
+A. DART에 등록된 모든 기업 (약 9만 개). 단, 재무제표는 DART에 공시한 기업만 조회 가능합니다 (비상장 소규모 기업은 제한적).
+
+**Q. 은행·보험사 데이터는 DART와 FISIS 중 어느 걸 써야 하나요?**
+A. 특정 금융회사 개별 분석 → DART. 업권 전체 비교·추이 분석 → FISIS. `plan_data_query`가 자동으로 최적 경로를 선택합니다.
 
 ---
 

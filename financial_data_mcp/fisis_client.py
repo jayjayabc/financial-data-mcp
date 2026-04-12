@@ -31,6 +31,36 @@ LARGE_DIVISIONS = {
     "금융투자": "D",
 }
 
+# 알려진 소분류 코드 (lrg_div별 sml_div 참조 매핑)
+# 실제 API 응답에서 동적으로 조회하려면 FisisClient.list_divisions() 사용
+SMALL_DIVISIONS: dict[str, dict[str, str]] = {
+    "A": {
+        "은행": "A",
+        "_note": "통계 엔드포인트에서는 sml_div 없이 lrg_div=A만으로 조회 가능. "
+                 "금융회사 조회(companySearch)에서 세부 업권 확인.",
+    },
+    "B": {
+        "은행신탁": "B010",
+        "증권신탁": "B020",
+        "보험신탁": "B030",
+        "_note": "비은행 권역. fisis_list_divisions 도구로 최신 코드 확인 권장.",
+    },
+    "C": {
+        "신용카드사": "C010",
+        "할부금융사": "C020",
+        "시설대여(리스)사": "C030",
+        "신기술금융사": "C040",
+        "_note": "여신전문금융사 권역 (카드·캐피탈·리스·신기술). "
+                 "fisis_list_divisions 도구로 최신 코드 확인 권장.",
+    },
+    "D": {
+        "증권회사": "D010",
+        "자산운용사": "D020",
+        "투자자문사": "D030",
+        "_note": "금융투자 권역. fisis_list_divisions 도구로 최신 코드 확인 권장.",
+    },
+}
+
 
 class FisisClient:
     """FISIS OpenAPI 비동기 클라이언트. 싱글톤으로 재사용되어야 함."""
@@ -108,6 +138,61 @@ class FisisClient:
         result = data.get("result") if isinstance(data, dict) else None
         if isinstance(result, dict):
             _check(result)
+
+    async def list_divisions(
+        self,
+        lrg_div: str = "",
+    ) -> list[dict[str, str]]:
+        """FISIS API에서 사용 가능한 업권(대분류/소분류) 목록을 동적으로 조회.
+
+        companySearch 응답에서 고유한 (대분류, 소분류) 조합을 추출합니다.
+        API가 반환하는 실제 코드를 기반으로 하므로 항상 최신 상태를 반영합니다.
+
+        Args:
+            lrg_div: 특정 대분류만 조회 (A/B/C/D). 비워두면 전체.
+
+        Returns:
+            [{"lrg_div": "A", "lrg_div_nm": "은행", "sml_div": "...", "sml_div_nm": "..."}, ...]
+        """
+        data = await self._get("companySearch.json", {"partDiv": lrg_div} if lrg_div else {})
+
+        # 응답에서 회사 리스트 추출
+        result = data.get("result", data) if isinstance(data, dict) else data
+        items = []
+        if isinstance(result, dict):
+            items = result.get("list", result.get("data", []))
+        elif isinstance(result, list):
+            items = result
+        if not isinstance(items, list):
+            items = []
+
+        # 고유한 업권 조합 추출
+        seen: set[tuple[str, str]] = set()
+        divisions: list[dict[str, str]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            lrg = item.get("part_div", item.get("partDiv", ""))
+            lrg_nm = item.get("part_div_nm", item.get("partDivNm", ""))
+            sml = item.get("sml_div", item.get("smlDiv", ""))
+            sml_nm = item.get("sml_div_nm", item.get("smlDivNm", ""))
+            key = (lrg, sml)
+            if key not in seen:
+                seen.add(key)
+                entry: dict[str, str] = {}
+                if lrg:
+                    entry["lrg_div"] = lrg
+                if lrg_nm:
+                    entry["lrg_div_nm"] = lrg_nm
+                if sml:
+                    entry["sml_div"] = sml
+                if sml_nm:
+                    entry["sml_div_nm"] = sml_nm
+                divisions.append(entry)
+
+        # 대분류 → 소분류 순 정렬
+        divisions.sort(key=lambda d: (d.get("lrg_div", ""), d.get("sml_div", "")))
+        return divisions
 
     async def list_statistics(
         self,

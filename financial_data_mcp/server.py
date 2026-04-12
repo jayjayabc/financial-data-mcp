@@ -41,7 +41,7 @@ from mcp.server.fastmcp import FastMCP
 
 from . import _validators as v
 from .dart_client import CORP_CLASS, REPORT_CODES, SJ_DIV, DartClient
-from .fisis_client import LARGE_DIVISIONS, FisisClient
+from .fisis_client import LARGE_DIVISIONS, SMALL_DIVISIONS, FisisClient
 
 
 def _load_env_file() -> None:
@@ -269,10 +269,16 @@ _DATA_CATALOG = {
         "granularity": "업권 전체 또는 개별 금융기관. 1회 호출 = 업권 전체 데이터.",
         "period": "월별 (YYYYMM ~ YYYYMM 범위 지정)",
         "lrg_div": {"A": "은행(국내은행)", "B": "비은행(신탁회사)", "C": "여신전문금융사·카드사", "D": "금융투자(증권·자산운용)"},
+        "sml_div_guide": (
+            "각 대분류(lrg_div) 하위에 세부 업권(sml_div)이 존재합니다. "
+            "예: C 아래 신용카드사·할부금융사·리스사·신기술금융사 등. "
+            "사용 가능한 전체 업권 목록은 fisis_list_divisions 도구로 동적 조회하세요."
+        ),
         "strength": [
             "1회 호출로 업권 전체 금융기관 데이터 조회",
             "금감원 표준 양식으로 기관 간 항목명 일관",
             "월별 시계열로 추이 분석에 최적",
+            "fisis_list_divisions로 전체 업권(대분류+소분류) 동적 탐색 가능",
         ],
         "weakness": [
             "금융업만 대상 (삼성전자·현대차 등 일반 기업 불가)",
@@ -681,6 +687,42 @@ async def dart_multi_company_financials(
 
 @mcp.tool()
 @_tool_safe
+async def fisis_list_divisions(
+    lrg_div: str = "",
+) -> str:
+    """FISIS API에서 사용 가능한 전체 업권(대분류/소분류) 목록을 조회합니다.
+
+    FISIS 통계·금융회사 조회 시 어떤 lrg_div/sml_div 값을 사용해야 하는지
+    모를 때 이 도구를 먼저 호출하세요. API에서 동적으로 조회하므로 항상 최신 상태입니다.
+
+    반환 예시: [{"lrg_div":"A","lrg_div_nm":"은행","sml_div":"010000","sml_div_nm":"시중은행"}, ...]
+
+    Args:
+        lrg_div: 특정 대분류만 조회 (A=은행, B=비은행, C=보험, D=금융투자). 비워두면 전체 업권.
+    """
+    divisions = await _fisis().list_divisions(lrg_div)
+    if not divisions:
+        # API 동적 조회 실패 시 정적 매핑 폴백
+        fallback: list[dict[str, str]] = []
+        src = {lrg_div: SMALL_DIVISIONS[lrg_div]} if lrg_div and lrg_div in SMALL_DIVISIONS else SMALL_DIVISIONS
+        for lg, sml_map in src.items():
+            lg_name = next((k for k, v in LARGE_DIVISIONS.items() if v == lg), lg)
+            for sml_name, sml_code in sml_map.items():
+                if sml_name.startswith("_"):
+                    continue
+                fallback.append({
+                    "lrg_div": lg,
+                    "lrg_div_nm": lg_name,
+                    "sml_div": sml_code,
+                    "sml_div_nm": sml_name,
+                    "_source": "static_fallback",
+                })
+        return _json({"divisions": fallback, "note": "API 응답이 비어 정적 매핑으로 폴백. 실제 코드와 다를 수 있음."})
+    return _json({"divisions": divisions, "count": len(divisions)})
+
+
+@mcp.tool()
+@_tool_safe
 async def fisis_list_statistics(
     lrg_div: str = "",
     sml_div: str = "",
@@ -692,7 +734,7 @@ async def fisis_list_statistics(
 
     Args:
         lrg_div: 대분류 (A=은행, B=비은행, C=보험, D=금융투자, 비워두면 전체)
-        sml_div: 소분류 (비워두면 전체)
+        sml_div: 소분류 (fisis_list_divisions로 사용 가능한 코드 확인, 비워두면 전체)
     """
     data = await _fisis().list_statistics(lrg_div, sml_div)
     return _json(_fisis_extract_list(data))
@@ -720,7 +762,7 @@ async def fisis_get_statistics(
         end_yymm: 조회 종료월 (YYYYMM, 예: "202412")
         finance_cd: 금융회사코드 (비워두면 전체)
         lrg_div: 대분류 코드 (A=은행, B=비은행, C=보험, D=금융투자)
-        sml_div: 소분류 코드
+        sml_div: 소분류 코드 (fisis_list_divisions로 사용 가능한 코드 확인)
         term: 조회 주기 — Q(분기, 기본값) 또는 Y(연간)
     """
     if not stat_cd:
@@ -750,10 +792,11 @@ async def fisis_list_companies(
     """FISIS에 등록된 금융회사 목록을 조회합니다.
 
     특정 권역의 회사 목록과 finance_cd 를 확인할 때 사용.
+    어떤 업권(sml_div)이 있는지 모르면 fisis_list_divisions를 먼저 호출하세요.
 
     Args:
         lrg_div: 대분류 (A=은행, B=비은행, C=보험, D=금융투자)
-        sml_div: 소분류
+        sml_div: 소분류 (fisis_list_divisions로 사용 가능한 코드 확인)
         finance_cd: 금융회사코드 (특정 회사만 조회 시)
     """
     data = await _fisis().list_companies(lrg_div, sml_div, finance_cd)

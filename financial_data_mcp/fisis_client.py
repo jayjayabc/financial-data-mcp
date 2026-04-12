@@ -23,10 +23,12 @@ logger = logging.getLogger("financial_data_mcp.fisis")
 BASE_URL = "https://fisis.fss.or.kr/openapi"
 RESPONSE_TTL_SECONDS = 3600  # 1시간
 
-# 대분류 코드 (FISIS API 응답에서 실제 코드를 확인 후 업데이트 필요)
-# fisis_list_statistics() 를 파라미터 없이 호출하면 전체 목록과 코드를 확인할 수 있음
-LARGE_DIVISIONS: dict[str, str] = {
-    # 예시: "은행": "A" 또는 "01" 등 — API 응답에서 확인
+# 대분류 코드 (2026-04-12 실 API 검증 완료)
+LARGE_DIVISIONS = {
+    "은행": "A",
+    "비은행": "B",
+    "보험": "C",
+    "금융투자": "D",
 }
 
 

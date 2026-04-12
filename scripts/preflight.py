@@ -268,10 +268,10 @@ async def check_fisis_api(fisis_key: str) -> None:
             url = f"{base}{ep}"
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
-                    # lrgDiv 없이 호출 (값이 API마다 다를 수 있으므로 기본 인증만 테스트)
+                    # lrgDiv='A' (은행) 으로 호출 — 2026-04-12 실증 완료
                     resp = await client.get(
                         url,
-                        params={"auth": fisis_key, "lang": "kr"},
+                        params={"auth": fisis_key, "lang": "kr", "lrgDiv": "A"},
                     )
             except httpx.TransportError as e:
                 errors.append(f"{url}: {type(e).__name__}")

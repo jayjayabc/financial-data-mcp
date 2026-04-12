@@ -129,11 +129,24 @@ class FisisClient:
         finance_cd: str = "",
         lrg_div: str = "",
         sml_div: str = "",
+        term: str = "Q",
     ) -> dict:
+        """FISIS 통계 데이터 조회.
+
+        Args:
+            stat_cd: 통계 코드 (list_no 필드값, 예: SA053)
+            strt_yymm: 시작 연월 YYYYMM (예: 202312)
+            end_yymm: 종료 연월 YYYYMM (예: 202412)
+            finance_cd: 금융회사 코드 (예: 0010927)
+            lrg_div: 대분류 코드 (A=은행, B=비은행, C=보험, D=금융투자)
+            sml_div: 소분류 코드
+            term: 주기 — Q(분기, 기본값) 또는 Y(연간)
+        """
         params: dict = {
-            "statCd": stat_cd,
-            "strtYymm": strt_yymm,
-            "endYymm": end_yymm,
+            "listNo": stat_cd,
+            "startBaseMm": strt_yymm,
+            "endBaseMm": end_yymm,
+            "term": term,
         }
         if finance_cd:
             params["financeCd"] = finance_cd
@@ -141,7 +154,7 @@ class FisisClient:
             params["lrgDiv"] = lrg_div
         if sml_div:
             params["smlDiv"] = sml_div
-        return await self._get("statisticsDataSearch.json", params)
+        return await self._get("statisticsInfoSearch.json", params)
 
     async def list_companies(
         self,
@@ -149,11 +162,18 @@ class FisisClient:
         sml_div: str = "",
         finance_cd: str = "",
     ) -> dict:
+        """금융회사 목록 조회.
+
+        Args:
+            lrg_div: 대분류 코드 → partDiv로 전달 (A=은행, B=비은행, C=보험, D=금융투자)
+            sml_div: 소분류 코드
+            finance_cd: 특정 금융회사 코드
+        """
         params: dict = {}
         if lrg_div:
-            params["lrgDiv"] = lrg_div
+            params["partDiv"] = lrg_div  # companySearch.json은 partDiv 파라미터 사용
         if sml_div:
             params["smlDiv"] = sml_div
         if finance_cd:
             params["financeCd"] = finance_cd
-        return await self._get("companyListSearch.json", params)
+        return await self._get("companySearch.json", params)

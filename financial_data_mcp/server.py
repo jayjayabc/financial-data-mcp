@@ -625,6 +625,7 @@ async def fisis_get_statistics(
     finance_cd: str = "",
     lrg_div: str = "",
     sml_div: str = "",
+    term: str = "Q",
 ) -> str:
     """FISIS에서 금융통계 데이터를 조회합니다.
 
@@ -636,8 +637,9 @@ async def fisis_get_statistics(
         strt_yymm: 조회 시작월 (YYYYMM, 예: "202401")
         end_yymm: 조회 종료월 (YYYYMM, 예: "202412")
         finance_cd: 금융회사코드 (비워두면 전체)
-        lrg_div: 대분류 코드
+        lrg_div: 대분류 코드 (A=은행, B=비은행, C=보험, D=금융투자)
         sml_div: 소분류 코드
+        term: 조회 주기 — Q(분기, 기본값) 또는 Y(연간)
     """
     if not stat_cd:
         raise ValueError("stat_cd는 필수입니다. fisis_list_statistics 로 먼저 확인하세요.")
@@ -647,9 +649,11 @@ async def fisis_get_statistics(
         raise ValueError(
             f"strt_yymm({strt_yymm})은 end_yymm({end_yymm}) 이하여야 합니다"
         )
+    if term not in ("Q", "Y"):
+        raise ValueError("term은 'Q'(분기) 또는 'Y'(연간)만 허용됩니다.")
 
     data = await _fisis().get_statistics(
-        stat_cd, strt_yymm, end_yymm, finance_cd, lrg_div, sml_div
+        stat_cd, strt_yymm, end_yymm, finance_cd, lrg_div, sml_div, term
     )
     return _json(_fisis_extract_list(data))
 

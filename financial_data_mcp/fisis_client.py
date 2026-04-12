@@ -23,7 +23,55 @@ logger = logging.getLogger("financial_data_mcp.fisis")
 BASE_URL = "https://fisis.fss.or.kr/openapi"
 RESPONSE_TTL_SECONDS = 3600  # 1시간
 
-# 대분류 코드 (2026-04-12 실 API 검증 완료)
+# ── FISIS 업권(권역) 코드 ─────────────────────────────────────
+#
+# FISIS API는 22개의 개별 업권 코드를 지원합니다.
+# - statisticsListSearch.json: lrgDiv 파라미터로 22개 코드 모두 사용
+# - companySearch.json: partDiv 파라미터로 17개 코드 사용
+# - statisticsInfoSearch.json: lrgDiv 파라미터
+#
+# 기존 4-그룹 분류(A=은행, B=비은행, C=보험, D=금융투자)는 상위 그룹핑이며,
+# 실제 API는 아래 22개 개별 코드를 직접 받습니다.
+
+# 전체 22개 업권 코드 (lrgDiv 기준, 통계코드 접두사 = S + 코드)
+DIVISIONS: dict[str, str] = {
+    # 은행
+    "A": "국내은행",
+    "J": "외국은행국내지점",
+    # 비은행 (신탁·저축·상호금융)
+    "B": "공통(신탁)",
+    "R": "종합금융회사",
+    "E": "상호저축은행",
+    "O": "신용협동조합",
+    "Q": "새마을금고",
+    "P": "농업협동조합",
+    "S": "수산업협동조합",
+    "M": "산림조합",
+    # 보험
+    "H": "생명보험",
+    "I": "손해보험",
+    # 여신전문금융
+    "C": "신용카드",
+    "K": "시설대여(리스)",
+    "T": "할부금융",
+    "N": "신기술사업금융",
+    # 금융투자
+    "F": "증권",
+    "W": "선물",
+    "G": "자산운용",
+    "X": "투자자문",
+    "D": "부동산신탁",
+    # 기타
+    "L": "금융지주회사",
+}
+
+# companySearch.json의 partDiv에 사용 가능한 17개 코드
+COMPANY_DIVISIONS: set[str] = {
+    "A", "F", "D", "N", "P", "B", "J", "W", "C", "E",
+    "S", "R", "H", "G", "K", "O", "M",
+}
+
+# 하위 호환용 — 기존 4-그룹 분류 (일부 코드에서 참조)
 LARGE_DIVISIONS = {
     "은행": "A",
     "비은행": "B",
@@ -31,34 +79,14 @@ LARGE_DIVISIONS = {
     "금융투자": "D",
 }
 
-# 알려진 소분류 코드 (lrg_div별 sml_div 참조 매핑)
-# 실제 API 응답에서 동적으로 조회하려면 FisisClient.list_divisions() 사용
-SMALL_DIVISIONS: dict[str, dict[str, str]] = {
-    "A": {
-        "은행": "A",
-        "_note": "통계 엔드포인트에서는 sml_div 없이 lrg_div=A만으로 조회 가능. "
-                 "금융회사 조회(companySearch)에서 세부 업권 확인.",
-    },
-    "B": {
-        "은행신탁": "B010",
-        "증권신탁": "B020",
-        "보험신탁": "B030",
-        "_note": "비은행 권역. fisis_list_divisions 도구로 최신 코드 확인 권장.",
-    },
-    "C": {
-        "신용카드사": "C010",
-        "할부금융사": "C020",
-        "시설대여(리스)사": "C030",
-        "신기술금융사": "C040",
-        "_note": "여신전문금융사 권역 (카드·캐피탈·리스·신기술). "
-                 "fisis_list_divisions 도구로 최신 코드 확인 권장.",
-    },
-    "D": {
-        "증권회사": "D010",
-        "자산운용사": "D020",
-        "투자자문사": "D030",
-        "_note": "금융투자 권역. fisis_list_divisions 도구로 최신 코드 확인 권장.",
-    },
+# 4-그룹 → 개별 업권 매핑 (상위 그룹이 어떤 개별 코드를 포함하는지)
+DIVISION_GROUPS: dict[str, list[str]] = {
+    "은행":     ["A", "J"],
+    "비은행":   ["B", "R", "E", "O", "Q", "P", "S", "M"],
+    "보험":     ["H", "I"],
+    "여신전문": ["C", "K", "T", "N"],
+    "금융투자": ["F", "W", "G", "X", "D"],
+    "기타":     ["L"],
 }
 
 
@@ -143,55 +171,63 @@ class FisisClient:
         self,
         lrg_div: str = "",
     ) -> list[dict[str, str]]:
-        """FISIS API에서 사용 가능한 업권(대분류/소분류) 목록을 동적으로 조회.
+        """FISIS API에서 사용 가능한 업권 목록을 동적으로 조회.
 
-        companySearch 응답에서 고유한 (대분류, 소분류) 조합을 추출합니다.
-        API가 반환하는 실제 코드를 기반으로 하므로 항상 최신 상태를 반영합니다.
+        두 가지 소스를 결합합니다:
+        1. 정적 매핑(DIVISIONS): 22개 전체 업권 코드 (항상 포함)
+        2. companySearch 응답: 실제 API에서 세부 소분류(sml_div) 추출
 
         Args:
-            lrg_div: 특정 대분류만 조회 (A/B/C/D). 비워두면 전체.
+            lrg_div: 특정 업권만 조회 (예: A, C, H 등). 비워두면 전체.
 
         Returns:
-            [{"lrg_div": "A", "lrg_div_nm": "은행", "sml_div": "...", "sml_div_nm": "..."}, ...]
+            [{"div_cd": "A", "div_nm": "국내은행", "sml_div": "...", "sml_div_nm": "..."}, ...]
         """
-        data = await self._get("companySearch.json", {"partDiv": lrg_div} if lrg_div else {})
-
-        # 응답에서 회사 리스트 추출
-        result = data.get("result", data) if isinstance(data, dict) else data
-        items = []
-        if isinstance(result, dict):
-            items = result.get("list", result.get("data", []))
-        elif isinstance(result, list):
-            items = result
-        if not isinstance(items, list):
-            items = []
-
-        # 고유한 업권 조합 추출
-        seen: set[tuple[str, str]] = set()
         divisions: list[dict[str, str]] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            lrg = item.get("part_div", item.get("partDiv", ""))
-            lrg_nm = item.get("part_div_nm", item.get("partDivNm", ""))
-            sml = item.get("sml_div", item.get("smlDiv", ""))
-            sml_nm = item.get("sml_div_nm", item.get("smlDivNm", ""))
-            key = (lrg, sml)
-            if key not in seen:
-                seen.add(key)
-                entry: dict[str, str] = {}
-                if lrg:
-                    entry["lrg_div"] = lrg
-                if lrg_nm:
-                    entry["lrg_div_nm"] = lrg_nm
-                if sml:
-                    entry["sml_div"] = sml
-                if sml_nm:
-                    entry["sml_div_nm"] = sml_nm
-                divisions.append(entry)
 
-        # 대분류 → 소분류 순 정렬
-        divisions.sort(key=lambda d: (d.get("lrg_div", ""), d.get("sml_div", "")))
+        # 1) 정적 매핑에서 전체 업권 코드 포함
+        if lrg_div:
+            if lrg_div in DIVISIONS:
+                divisions.append({"div_cd": lrg_div, "div_nm": DIVISIONS[lrg_div]})
+        else:
+            for code, name in DIVISIONS.items():
+                divisions.append({"div_cd": code, "div_nm": name})
+
+        # 2) companySearch에서 세부 소분류 동적 추출 시도
+        try:
+            codes_to_query = [lrg_div] if lrg_div else sorted(COMPANY_DIVISIONS)
+            for code in codes_to_query:
+                if code not in COMPANY_DIVISIONS:
+                    continue
+                data = await self._get("companySearch.json", {"partDiv": code})
+                result = data.get("result", data) if isinstance(data, dict) else data
+                items: list = []
+                if isinstance(result, dict):
+                    items = result.get("list", result.get("data", []))
+                elif isinstance(result, list):
+                    items = result
+                if not isinstance(items, list):
+                    continue
+
+                seen: set[str] = set()
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    sml = item.get("sml_div", item.get("smlDiv", ""))
+                    sml_nm = item.get("sml_div_nm", item.get("smlDivNm", ""))
+                    if sml and sml not in seen:
+                        seen.add(sml)
+                        entry: dict[str, str] = {"div_cd": code, "div_nm": DIVISIONS.get(code, "")}
+                        entry["sml_div"] = sml
+                        if sml_nm:
+                            entry["sml_div_nm"] = sml_nm
+                        divisions.append(entry)
+        except Exception:
+            # API 호출 실패 시 정적 매핑만 반환
+            logger.debug("companySearch 동적 조회 실패, 정적 매핑만 반환")
+
+        # 업권 코드 → 소분류 순 정렬
+        divisions.sort(key=lambda d: (d.get("div_cd", ""), d.get("sml_div", "")))
         return divisions
 
     async def list_statistics(

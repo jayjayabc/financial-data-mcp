@@ -447,7 +447,7 @@ async def fisis_list_statistics(
     fisis_get_statistics 로 실제 데이터를 조회하세요.
 
     Args:
-        lrg_div: 대분류 (01=은행, 02=비은행, 03=보험, 04=금융투자, 비워두면 전체)
+        lrg_div: 대분류 코드 (비워두면 전체. 코드는 fisis_list_statistics 응답에서 확인)
         sml_div: 소분류 (비워두면 전체)
     """
     data = await _fisis().list_statistics(lrg_div, sml_div)
@@ -503,7 +503,7 @@ async def fisis_list_companies(
     특정 권역의 회사 목록과 finance_cd 를 확인할 때 사용.
 
     Args:
-        lrg_div: 대분류 (01=은행, 02=비은행, 03=보험, 04=금융투자)
+        lrg_div: 대분류 코드 (fisis_list_statistics 응답에서 확인)
         sml_div: 소분류
         finance_cd: 금융회사코드 (특정 회사만 조회 시)
     """
@@ -566,8 +566,8 @@ async def get_api_reference() -> str:
                 "2. dart_multi_company_financials(corp_codes=[...], bsns_year='2024')",
             ],
             "bank_stats": [
-                "1. fisis_list_statistics(lrg_div='01')",
-                "2. fisis_list_companies(lrg_div='01')",
+                "1. fisis_list_statistics() → 전체 통계목록에서 lrgDiv/smlDiv/statCd 확인",
+                "2. fisis_list_companies(lrg_div='<확인한코드>') → 회사목록",
                 "3. fisis_get_statistics(stat_cd='<확인한코드>', strt_yymm='202401', end_yymm='202412')",
             ],
         },

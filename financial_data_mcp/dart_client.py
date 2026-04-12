@@ -2,6 +2,14 @@
 
 API 문서: https://opendart.fss.or.kr/guide/main.do
 
+전체 81개 엔드포인트 지원:
+- DS001: 공시정보 (공시검색, 기업개황, 공시서류원본)
+- DS002: 사업보고서 주요정보 28개 (배당, 임원, 직원, 최대주주, 감사 등)
+- DS003: 재무정보 (주요계정, 전체재무제표, XBRL)
+- DS004: 지분공시 (대량보유, 임원·주요주주 소유)
+- DS005: 주요사항보고서 36개 (증자, 합병, 분할, 사채, 소송 등)
+- DS006: 증권신고서 6개 (지분증권, 채무증권, 합병, 분할 등)
+
 주요 최적화:
 - 싱글톤 재사용 전제: 인스턴스 내부에 httpx.AsyncClient, 응답 캐시, 기업코드 캐시 보관
 - 기업코드: 메모리 → 디스크(30일) → 네트워크 순 조회. asyncio.Lock 으로 동시 다운로드 방지
@@ -56,6 +64,98 @@ SJ_DIV = {
     "CIS": "포괄손익계산서",
     "CF": "현금흐름표",
     "SCE": "자본변동표",
+}
+
+# ── DS002: 사업보고서 주요정보 (28개) ──────────────────────────
+# 공통 파라미터: corp_code, bsns_year, reprt_code
+BUSINESS_REPORT_TYPES: dict[str, dict[str, str]] = {
+    "증자감자": {"path": "irdsSttus.json", "desc": "증자(감자) 현황"},
+    "주식총수": {"path": "stockTotqySttus.json", "desc": "주식의 총수 현황"},
+    "배당": {"path": "alotMatter.json", "desc": "배당에 관한 사항"},
+    "자기주식": {"path": "tesstkAcqsDspsSttus.json", "desc": "자기주식 취득 및 처분 현황"},
+    "최대주주": {"path": "hyslrSttus.json", "desc": "최대주주 현황"},
+    "최대주주변동": {"path": "hyslrChgSttus.json", "desc": "최대주주 변동현황"},
+    "소액주주": {"path": "mrhlSttus.json", "desc": "소액주주 현황"},
+    "임원현황": {"path": "exctvSttus.json", "desc": "임원 현황"},
+    "직원현황": {"path": "empSttus.json", "desc": "직원 현황 (인원수·평균근속·평균급여)"},
+    "이사감사개인별보수": {"path": "hmvAuditIndvdlBySttus.json", "desc": "이사·감사의 개인별 보수현황"},
+    "이사감사전체보수": {"path": "hmvAuditAllSttus.json", "desc": "이사·감사 전체의 보수현황"},
+    "개인별보수5억이상": {"path": "indvdlByPay.json", "desc": "개인별 보수지급 금액 (5억이상 상위5인)"},
+    "타법인출자": {"path": "otrCprInvstmntSttus.json", "desc": "타법인 출자현황"},
+    "사외이사변동": {"path": "outcmpnyDrctrNdChangeSttus.json", "desc": "사외이사 및 그 변동현황"},
+    "신종자본증권미상환": {"path": "newCaplScritsNrdmpBlce.json", "desc": "신종자본증권 미상환 잔액"},
+    "조건부자본증권미상환": {"path": "cndlCaplScritsNrdmpBlce.json", "desc": "조건부자본증권 미상환 잔액"},
+    "회사채미상환": {"path": "cprndNrdmpBlce.json", "desc": "회사채 미상환 잔액"},
+    "단기사채미상환": {"path": "srtpdPsndbtNrdmpBlce.json", "desc": "단기사채 미상환 잔액"},
+    "기업어음미상환": {"path": "entrprsBilScritsNrdmpBlce.json", "desc": "기업어음증권 미상환 잔액"},
+    "채무증권발행": {"path": "detScritsIsuAcmslt.json", "desc": "채무증권 발행실적"},
+    "사모자금사용내역": {"path": "prvsrpCptalUseDtls.json", "desc": "사모자금의 사용내역"},
+    "공모자금사용내역": {"path": "pssrpCptalUseDtls.json", "desc": "공모자금의 사용내역"},
+    "이사감사보수승인금액": {"path": "drctrAdtAllMendngSttusGmtsckConfmAmount.json", "desc": "이사·감사 전체 보수현황 (주총 승인금액)"},
+    "이사감사보수유형별": {"path": "drctrAdtAllMendngSttusMendngPymntamtTyCl.json", "desc": "이사·감사 전체 보수현황 (유형별)"},
+    "미등기임원보수": {"path": "unrstExctvMendngSttus.json", "desc": "미등기임원 보수현황"},
+    "감사인명칭의견": {"path": "accnutAdtorNmNdAdtOpinion.json", "desc": "회계감사인의 명칭 및 감사의견"},
+    "감사용역체결": {"path": "adtServcCnclsSttus.json", "desc": "감사용역체결현황"},
+    "비감사용역계약": {"path": "accnutAdtorNonAdtServcCnclsSttus.json", "desc": "회계감사인과의 비감사용역 계약체결 현황"},
+}
+
+# ── DS004: 지분공시 (2개) ──────────────────────────────────────
+# 파라미터: corp_code
+EQUITY_DISCLOSURE_TYPES: dict[str, dict[str, str]] = {
+    "대량보유": {"path": "majorstock.json", "desc": "대량보유 상황보고 (5% 이상 지분변동)"},
+    "임원주요주주": {"path": "elestock.json", "desc": "임원·주요주주 소유보고"},
+}
+
+# ── DS005: 주요사항보고서 (36개) ────────────────────────────────
+# 파라미터: corp_code
+MAJOR_EVENT_TYPES: dict[str, dict[str, str]] = {
+    "부도발생": {"path": "dfOcr.json", "desc": "부도발생"},
+    "영업정지": {"path": "bsnSp.json", "desc": "영업정지"},
+    "회생절차개시": {"path": "ctrcvsBgrq.json", "desc": "회생절차 개시신청"},
+    "해산사유발생": {"path": "dsRsOcr.json", "desc": "해산사유 발생"},
+    "유상증자결정": {"path": "piicDecsn.json", "desc": "유상증자 결정"},
+    "무상증자결정": {"path": "fricDecsn.json", "desc": "무상증자 결정"},
+    "유무상증자결정": {"path": "pifricDecsn.json", "desc": "유무상증자 결정"},
+    "감자결정": {"path": "crDecsn.json", "desc": "감자 결정"},
+    "채권은행관리개시": {"path": "bnkMngtPcbg.json", "desc": "채권은행 등의 관리절차 개시"},
+    "채권은행관리중단": {"path": "bnkMngtPcsp.json", "desc": "채권은행 등의 관리절차 중단"},
+    "소송제기": {"path": "lwstLg.json", "desc": "소송 등의 제기"},
+    "해외상장결정": {"path": "ovLstDecsn.json", "desc": "해외 증권시장 상장 결정"},
+    "해외상장폐지결정": {"path": "ovDlstDecsn.json", "desc": "해외 증권시장 상장폐지 결정"},
+    "해외상장": {"path": "ovLst.json", "desc": "해외 증권시장 상장"},
+    "해외상장폐지": {"path": "ovDlst.json", "desc": "해외 증권시장 상장폐지"},
+    "전환사채발행결정": {"path": "cvbdIsDecsn.json", "desc": "전환사채권 발행결정"},
+    "신주인수권부사채발행결정": {"path": "bdwtIsDecsn.json", "desc": "신주인수권부사채권 발행결정"},
+    "교환사채발행결정": {"path": "exbdIsDecsn.json", "desc": "교환사채권 발행결정"},
+    "코코본드발행결정": {"path": "wdCocobdIsDecsn.json", "desc": "조건부자본증권(상각형) 발행결정"},
+    "자산양수도풋백옵션": {"path": "astInhtrfEtcPtbkOpt.json", "desc": "자산양수도(풋백옵션)"},
+    "타법인주식양도결정": {"path": "otcprStkInvscrTrfDecsn.json", "desc": "타법인 주식 및 출자증권 양도결정"},
+    "타법인주식양수결정": {"path": "otcprStkInvscrInhDecsn.json", "desc": "타법인 주식 및 출자증권 양수결정"},
+    "유형자산양도결정": {"path": "tgastTrfDecsn.json", "desc": "유형자산 양도 결정"},
+    "유형자산양수결정": {"path": "tgastInhDecsn.json", "desc": "유형자산 양수 결정"},
+    "영업양도결정": {"path": "bsnTrfDecsn.json", "desc": "영업양도 결정"},
+    "영업양수결정": {"path": "bsnInhDecsn.json", "desc": "영업양수 결정"},
+    "자기주식취득결정": {"path": "tsstkAqDecsn.json", "desc": "자기주식 취득 결정"},
+    "자기주식처분결정": {"path": "tsstkDpDecsn.json", "desc": "자기주식 처분 결정"},
+    "자기주식신탁계약체결": {"path": "tsstkAqTrctrCnsDecsn.json", "desc": "자기주식취득 신탁계약 체결 결정"},
+    "자기주식신탁계약해지": {"path": "tsstkAqTrctrCcDecsn.json", "desc": "자기주식취득 신탁계약 해지 결정"},
+    "주식교환이전결정": {"path": "stkExtrDecsn.json", "desc": "주식교환·이전 결정"},
+    "합병결정": {"path": "cmpMgDecsn.json", "desc": "회사합병 결정"},
+    "분할결정": {"path": "cmpDvDecsn.json", "desc": "회사분할 결정"},
+    "분할합병결정": {"path": "cmpDvmgDecsn.json", "desc": "회사분할합병 결정"},
+    "주권관련사채양수결정": {"path": "stkrtbdInhDecsn.json", "desc": "주권관련 사채권 양수 결정"},
+    "주권관련사채양도결정": {"path": "stkrtbdTrfDecsn.json", "desc": "주권관련 사채권 양도 결정"},
+}
+
+# ── DS006: 증권신고서 (6개) ────────────────────────────────────
+# 파라미터: corp_code, bgn_de, end_de
+SECURITIES_REPORT_TYPES: dict[str, dict[str, str]] = {
+    "지분증권": {"path": "estkRs.json", "desc": "지분증권"},
+    "채무증권": {"path": "bdRs.json", "desc": "채무증권"},
+    "증권예탁증권": {"path": "stkdpRs.json", "desc": "증권예탁증권"},
+    "합병": {"path": "mgRs.json", "desc": "합병 등"},
+    "주식교환이전": {"path": "extrRs.json", "desc": "주식의 포괄적 교환·이전"},
+    "분할": {"path": "dvRs.json", "desc": "분할"},
 }
 
 
@@ -295,5 +395,160 @@ class DartClient:
                 "bsns_year": bsns_year,
                 "reprt_code": reprt_code,
             },
+            use_cache=True,
+        )
+
+    # ── DS002: 사업보고서 주요정보 ─────────────────────────────
+
+    async def get_business_report(
+        self,
+        corp_code: str,
+        bsns_year: str,
+        reprt_code: str,
+        info_type: str,
+    ) -> dict:
+        """사업보고서 주요정보 조회. info_type으로 28개 항목 중 선택."""
+        meta = BUSINESS_REPORT_TYPES.get(info_type)
+        if not meta:
+            raise ValueError(
+                f"지원하지 않는 info_type: '{info_type}'. "
+                f"사용 가능: {', '.join(sorted(BUSINESS_REPORT_TYPES))}"
+            )
+        return await self._get(
+            meta["path"],
+            {"corp_code": corp_code, "bsns_year": bsns_year, "reprt_code": reprt_code},
+            use_cache=True,
+        )
+
+    # ── DS004: 지분공시 ────────────────────────────────────────
+
+    async def get_equity_disclosure(
+        self,
+        corp_code: str,
+        report_type: str,
+    ) -> dict:
+        """지분공시 조회. report_type: 대량보유 / 임원주요주주."""
+        meta = EQUITY_DISCLOSURE_TYPES.get(report_type)
+        if not meta:
+            raise ValueError(
+                f"지원하지 않는 report_type: '{report_type}'. "
+                f"사용 가능: {', '.join(sorted(EQUITY_DISCLOSURE_TYPES))}"
+            )
+        return await self._get(
+            meta["path"],
+            {"corp_code": corp_code},
+            use_cache=True,
+        )
+
+    # ── DS005: 주요사항보고서 ──────────────────────────────────
+
+    async def get_major_event(
+        self,
+        corp_code: str,
+        event_type: str,
+    ) -> dict:
+        """주요사항보고서 조회. event_type으로 36개 이벤트 중 선택."""
+        meta = MAJOR_EVENT_TYPES.get(event_type)
+        if not meta:
+            raise ValueError(
+                f"지원하지 않는 event_type: '{event_type}'. "
+                f"사용 가능: {', '.join(sorted(MAJOR_EVENT_TYPES))}"
+            )
+        return await self._get(
+            meta["path"],
+            {"corp_code": corp_code},
+            use_cache=True,
+        )
+
+    # ── DS006: 증권신고서 ──────────────────────────────────────
+
+    async def get_securities_report(
+        self,
+        corp_code: str,
+        report_type: str,
+        bgn_de: str = "",
+        end_de: str = "",
+    ) -> dict:
+        """증권신고서 조회. report_type으로 6개 유형 중 선택."""
+        meta = SECURITIES_REPORT_TYPES.get(report_type)
+        if not meta:
+            raise ValueError(
+                f"지원하지 않는 report_type: '{report_type}'. "
+                f"사용 가능: {', '.join(sorted(SECURITIES_REPORT_TYPES))}"
+            )
+        params: dict = {"corp_code": corp_code}
+        if bgn_de:
+            params["bgn_de"] = bgn_de
+        if end_de:
+            params["end_de"] = end_de
+        return await self._get(meta["path"], params, use_cache=True)
+
+    # ── DS001: 공시서류 원본 ───────────────────────────────────
+
+    async def get_document(self, rcept_no: str) -> dict:
+        """공시서류 원본파일(ZIP) 다운로드 후 텍스트 추출.
+
+        주석(notes) 등 전체 공시 원문에 접근할 때 사용.
+        ZIP 내 XML/HTML을 파싱하여 텍스트로 반환합니다.
+        """
+        import re
+        from html.parser import HTMLParser
+
+        resp = await self._raw_get(
+            "/document.xml",
+            {"crtfc_key": self.api_key, "rcept_no": rcept_no},
+            timeout=60.0,
+        )
+
+        # ZIP 해제
+        try:
+            with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+                file_list = zf.namelist()
+                result: dict = {"rcept_no": rcept_no, "files": file_list, "documents": []}
+
+                for fname in file_list:
+                    if not any(fname.lower().endswith(ext) for ext in (".xml", ".htm", ".html")):
+                        continue
+                    raw = zf.read(fname)
+                    # 인코딩 감지
+                    for enc in ("utf-8", "euc-kr", "cp949"):
+                        try:
+                            text = raw.decode(enc)
+                            break
+                        except (UnicodeDecodeError, LookupError):
+                            continue
+                    else:
+                        text = raw.decode("utf-8", errors="replace")
+
+                    # HTML 태그 제거하여 순수 텍스트 추출
+                    class _TagStripper(HTMLParser):
+                        def __init__(self) -> None:
+                            super().__init__()
+                            self.parts: list[str] = []
+                        def handle_data(self, data: str) -> None:
+                            self.parts.append(data)
+
+                    stripper = _TagStripper()
+                    stripper.feed(text)
+                    clean = " ".join(stripper.parts)
+                    clean = re.sub(r"\s+", " ", clean).strip()
+
+                    # 너무 긴 문서는 앞부분만 (토큰 절약)
+                    if len(clean) > 50000:
+                        clean = clean[:50000] + f"...[전체 {len(clean)}자 중 50000자까지 표시]"
+
+                    result["documents"].append({"file": fname, "text": clean})
+
+                return result
+        except zipfile.BadZipFile:
+            raise RuntimeError(f"DART document.xml 응답이 유효한 ZIP이 아닙니다 (rcept_no={rcept_no})")
+
+    # ── DS003: XBRL 택사노미 ───────────────────────────────────
+
+    async def get_xbrl_taxonomy(self, sj_div: str) -> dict:
+        """XBRL 택사노미(재무제표 표준 계정과목) 조회."""
+        return await self._get(
+            "xbrlTaxonomy.json",
+            {"sj_div": sj_div},
             use_cache=True,
         )

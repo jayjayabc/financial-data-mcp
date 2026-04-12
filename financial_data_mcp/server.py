@@ -40,7 +40,16 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 from . import _validators as v
-from .dart_client import CORP_CLASS, REPORT_CODES, SJ_DIV, DartClient
+from .dart_client import (
+    BUSINESS_REPORT_TYPES,
+    CORP_CLASS,
+    EQUITY_DISCLOSURE_TYPES,
+    MAJOR_EVENT_TYPES,
+    REPORT_CODES,
+    SECURITIES_REPORT_TYPES,
+    SJ_DIV,
+    DartClient,
+)
 from .fisis_client import DIVISIONS, DIVISION_GROUPS, LARGE_DIVISIONS, FisisClient
 
 
@@ -240,7 +249,12 @@ _DATA_CATALOG = {
         "data_types": {
             "재무제표": "BS(재무상태표), IS(손익계산서), CIS(포괄손익), CF(현금흐름), SCE(자본변동) — 연결(CFS)+개별(OFS)",
             "주요계정": "자산총계, 부채총계, 자본총계, 매출액, 영업이익, 당기순이익 (당기/전기/전전기)",
-            "공시": "정기공시, 주요사항보고, 발행공시, 지분공시, 외부감사 등",
+            "사업보고서_주요정보": "배당, 직원현황, 임원현황, 최대주주, 자기주식, 타법인출자, 감사의견 등 28개 항목 → dart_business_report",
+            "지분공시": "대량보유(5%이상), 임원·주요주주 소유보고 → dart_equity_disclosure",
+            "주요사항보고서": "증자, 감자, 합병, 분할, 사채발행, 자기주식, 소송 등 36개 이벤트 → dart_major_event",
+            "증권신고서": "지분증권, 채무증권, 합병, 분할 등 6개 유형 → dart_securities_report",
+            "공시서류_원본": "주석(notes) 포함 공시 원문 텍스트 → dart_document (rcept_no 필요)",
+            "공시검색": "정기공시, 주요사항보고, 발행공시, 지분공시, 외부감사 등",
             "기업개황": "회사명, 대표자, 업종, 주소, 설립일, 상장일, 홈페이지",
         },
         "granularity": "개별 기업 단위. 1회 호출 = 1개 기업. 다중비교 최대 20개.",
@@ -250,11 +264,15 @@ _DATA_CATALOG = {
         "strength": [
             "모든 DART 등록 기업 대상 (금융업 + 일반 기업 모두)",
             "전체 계정과목 수준 상세 재무제표",
+            "사업보고서 28개 항목 (배당·임원·직원·감사 등) 구조화 조회",
+            "주요사항보고서 36개 이벤트 (증자·합병·분할·소송 등)",
+            "공시 원문(주석 포함) 텍스트 추출 가능 (dart_document)",
             "개별 기업의 공시 이력 검색",
         ],
         "weakness": [
             "업권 전체 비교 시 기업별 개별 호출 필요 (N개 기업 = N+회 API 호출)",
             "판관비·충당금 등 세부 항목은 전체 재무제표(full)에서만 조회 (토큰 대량 소비)",
+            "주석(notes)은 dart_document로 원문 텍스트 추출만 가능 (구조화 JSON 없음)",
         ],
         "cost": "기업당 1~2 API 호출 (quota 일 20,000건)",
     },
@@ -681,6 +699,165 @@ async def dart_multi_company_financials(
     data = await _dart().get_multi_company_financials(corp_codes, bsns_year, reprt_code)
     items = [_compact_fin_row(r) for r in data.get("list", []) or []]
     return _plan_hint(items)
+
+
+@mcp.tool()
+@_tool_safe
+async def dart_business_report(
+    corp_code: str,
+    bsns_year: str,
+    reprt_code: str = "11011",
+    info_type: str = "",
+) -> str:
+    """DART 사업보고서 주요정보를 조회합니다 (28개 항목).
+
+    배당, 임원현황, 직원현황, 최대주주, 자기주식, 감사의견 등
+    사업보고서에 공시된 구조화된 데이터를 조회합니다.
+
+    info_type을 비워두면 사용 가능한 전체 항목 목록을 반환합니다.
+
+    자주 쓰는 info_type:
+    배당, 직원현황, 임원현황, 최대주주, 최대주주변동, 자기주식,
+    타법인출자, 감사인명칭의견, 개인별보수5억이상
+
+    Args:
+        corp_code: 기업코드 (8자리)
+        bsns_year: 사업연도 (YYYY)
+        reprt_code: 보고서코드 (11011=사업보고서, 11012=반기, 11013=1분기, 11014=3분기)
+        info_type: 조회할 항목 (비워두면 전체 항목 목록 반환)
+    """
+    if not info_type:
+        items = [{"type": k, "desc": m["desc"]} for k, m in BUSINESS_REPORT_TYPES.items()]
+        return _json({"available_types": items, "count": len(items),
+                       "usage": "info_type 파라미터에 type 값을 넣어 호출하세요."})
+    v.validate_corp_code(corp_code)
+    v.validate_year(bsns_year)
+    v.validate_report_code(reprt_code)
+    data = await _dart().get_business_report(corp_code, bsns_year, reprt_code, info_type)
+    return _json(_strip_dart_meta(data))
+
+
+@mcp.tool()
+@_tool_safe
+async def dart_equity_disclosure(
+    corp_code: str,
+    report_type: str = "",
+) -> str:
+    """DART 지분공시 정보를 조회합니다.
+
+    report_type:
+    - 대량보유: 5% 이상 지분 변동 보고
+    - 임원주요주주: 임원·주요주주 소유 보고
+
+    Args:
+        corp_code: 기업코드 (8자리)
+        report_type: 대량보유 / 임원주요주주 (비워두면 목록 반환)
+    """
+    if not report_type:
+        items = [{"type": k, "desc": m["desc"]} for k, m in EQUITY_DISCLOSURE_TYPES.items()]
+        return _json({"available_types": items})
+    v.validate_corp_code(corp_code)
+    data = await _dart().get_equity_disclosure(corp_code, report_type)
+    return _json(_strip_dart_meta(data))
+
+
+@mcp.tool()
+@_tool_safe
+async def dart_major_event(
+    corp_code: str,
+    event_type: str = "",
+) -> str:
+    """DART 주요사항보고서를 조회합니다 (36개 이벤트 유형).
+
+    증자, 감자, 합병, 분할, 사채발행, 자기주식, 소송 등
+    기업의 주요 경영 이벤트 공시 데이터를 조회합니다.
+
+    event_type을 비워두면 사용 가능한 전체 이벤트 목록을 반환합니다.
+
+    자주 쓰는 event_type:
+    유상증자결정, 무상증자결정, 감자결정, 합병결정, 분할결정,
+    전환사채발행결정, 자기주식취득결정, 소송제기
+
+    Args:
+        corp_code: 기업코드 (8자리)
+        event_type: 이벤트 유형 (비워두면 전체 목록 반환)
+    """
+    if not event_type:
+        items = [{"type": k, "desc": m["desc"]} for k, m in MAJOR_EVENT_TYPES.items()]
+        return _json({"available_types": items, "count": len(items),
+                       "usage": "event_type 파라미터에 type 값을 넣어 호출하세요."})
+    v.validate_corp_code(corp_code)
+    data = await _dart().get_major_event(corp_code, event_type)
+    return _json(_strip_dart_meta(data))
+
+
+@mcp.tool()
+@_tool_safe
+async def dart_securities_report(
+    corp_code: str,
+    report_type: str = "",
+    bgn_de: str = "",
+    end_de: str = "",
+) -> str:
+    """DART 증권신고서 정보를 조회합니다 (6개 유형).
+
+    report_type: 지분증권, 채무증권, 증권예탁증권, 합병, 주식교환이전, 분할
+
+    Args:
+        corp_code: 기업코드 (8자리)
+        report_type: 증권신고서 유형 (비워두면 전체 목록 반환)
+        bgn_de: 검색 시작일 (YYYYMMDD, 선택)
+        end_de: 검색 종료일 (YYYYMMDD, 선택)
+    """
+    if not report_type:
+        items = [{"type": k, "desc": m["desc"]} for k, m in SECURITIES_REPORT_TYPES.items()]
+        return _json({"available_types": items})
+    v.validate_corp_code(corp_code)
+    v.validate_yyyymmdd(bgn_de, "bgn_de")
+    v.validate_yyyymmdd(end_de, "end_de")
+    data = await _dart().get_securities_report(corp_code, report_type, bgn_de, end_de)
+    return _json(_strip_dart_meta(data))
+
+
+@mcp.tool()
+@_tool_safe
+async def dart_document(
+    rcept_no: str,
+) -> str:
+    """DART 공시서류 원본을 다운로드하여 텍스트를 추출합니다.
+
+    재무제표 주석(notes), 감사보고서 본문 등 구조화 API로 제공되지 않는
+    공시 원문 데이터에 접근할 때 사용합니다.
+
+    rcept_no는 dart_search_disclosures 결과에서 확인할 수 있습니다.
+    ⚠️ 문서 크기가 클 수 있어 50,000자까지만 반환됩니다.
+
+    Args:
+        rcept_no: 접수번호 (14자리, dart_search_disclosures 결과에서 확인)
+    """
+    if not rcept_no or not rcept_no.strip():
+        raise ValueError("rcept_no는 필수입니다. dart_search_disclosures로 먼저 확인하세요.")
+    data = await _dart().get_document(rcept_no)
+    return _json(data)
+
+
+@mcp.tool()
+@_tool_safe
+async def dart_xbrl_taxonomy(
+    sj_div: str,
+) -> str:
+    """XBRL 택사노미(재무제표 표준 계정과목)를 조회합니다.
+
+    DART 재무제표에서 사용되는 표준 계정과목 체계를 확인할 때 사용합니다.
+
+    Args:
+        sj_div: 재무제표 구분 (BS=재무상태표, IS=손익계산서, CIS=포괄손익, CF=현금흐름, SCE=자본변동)
+    """
+    v.validate_sj_div(sj_div)
+    if not sj_div:
+        raise ValueError("sj_div는 필수입니다 (BS/IS/CIS/CF/SCE)")
+    data = await _dart().get_xbrl_taxonomy(sj_div)
+    return _json(_strip_dart_meta(data))
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

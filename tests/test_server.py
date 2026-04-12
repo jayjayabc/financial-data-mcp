@@ -170,6 +170,7 @@ async def test_dart_financial_statements_returns_compact_json():
     mock_client.get_financial_statements = AsyncMock(return_value=raw)
 
     with patch.object(server, "_dart", return_value=mock_client):
+        server._plan_called = True  # plan 호출 완료 상태로 설정
         result = await server.dart_financial_statements(
             corp_code="00126380", bsns_year="2024"
         )
@@ -195,12 +196,31 @@ async def test_dart_search_company_returns_compact():
     )
 
     with patch.object(server, "_dart", return_value=mock_client):
+        server._plan_called = True  # plan 호출 완료 상태로 설정
         result = await server.dart_search_company(name="삼성전자")
 
     data = json.loads(result)
     # 빈 stock_code는 drop_empty 에 의해 제거되어야 함
     assert "stock_code" in data[0]
     assert "stock_code" not in data[1]
+
+
+@pytest.mark.asyncio
+async def test_dart_search_company_without_plan_includes_hint():
+    """plan_data_query 미호출 시 hint 키가 포함된 응답 반환."""
+    mock_client = MagicMock()
+    mock_client.search_company = AsyncMock(
+        return_value=[{"corp_code": "001", "corp_name": "삼성전자", "stock_code": "005930"}]
+    )
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        server._plan_called = False  # plan 미호출 상태
+        result = await server.dart_search_company(name="삼성전자")
+
+    data = json.loads(result)
+    assert "hint" in data
+    assert "data" in data
+    assert data["data"][0]["corp_code"] == "001"
 
 
 @pytest.mark.asyncio

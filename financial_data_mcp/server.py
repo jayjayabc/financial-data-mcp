@@ -11,8 +11,9 @@ DART(전자공시시스템)과 FISIS(금융통계정보시스템) API를 통해
     {
       "mcpServers": {
         "financial-data": {
-          "command": "uv",
-          "args": ["--directory", "/path/to/fisis-app", "run", "financial-data-mcp"]
+          "command": "python",
+          "args": ["-m", "financial_data_mcp"],
+          "cwd": "/path/to/financial-data-mcp"
         }
       }
     }
@@ -276,9 +277,42 @@ _DATA_CATALOG = {
         "weakness": [
             "금융업만 대상 (삼성전자·현대차 등 일반 기업 불가)",
             "DART보다 계정과목 수준이 제한적",
-            "통계코드(stat_cd)를 먼저 확인해야 함 (fisis_list_statistics 선행)",
         ],
         "cost": "1~2 API 호출로 업권 전체 데이터",
+        "common_stat_codes": {
+            "note": "fisis_get_statistics의 stat_cd 파라미터 = fisis_list_statistics 결과의 list_no 필드값",
+            "은행(lrg_div=A)": {
+                "SA021": "요약손익계산서(은행계정) — 이자이익·수수료·판관비·당기순이익",
+                "SA024": "연결손익계산서 — 연결기준 손익",
+                "SA033": "부문별 손익(판매비와 관리비) — 판관비 세부 항목",
+                "SA003": "요약재무상태표(자산-은행계정)",
+                "SA004": "요약재무상태표(부채 및 자본-은행계정)",
+                "SA014": "자본적정성 — BIS비율 등",
+                "SA015": "여신건전성 — 고정이하여신비율 등",
+                "SA017": "수익성 — ROA·ROE·NIM 등",
+                "SA048": "국내은행 수익구조 — 순이자이익·비이자이익 구조",
+                "SA053": "BIS비율",
+                "SA054": "부실채권비율(NPL)",
+            },
+            "여신전문금융사·카드사(lrg_div=C)": {
+                "SC218": "요약손익계산서(18.12월 이후) — 카드·캐피탈·할부금융",
+                "SC118": "요약손익계산서(08.03월 이후)",
+                "SC103": "요약재무상태표(자산)(08.03월 이후)",
+                "SC104": "요약재무상태표(부채 및 자본)(08.03월 이후)",
+                "SC116": "부문별 자산현황(판매비와 관리비)",
+                "SC009": "수익성",
+                "SC120": "전업카드사 순이익 추이",
+                "SC126": "주요재무현황",
+            },
+            "금융투자(lrg_div=D)": {
+                "SD107": "요약손익계산서(11.06월 이후) — 증권사·자산운용사",
+                "SD103": "요약재무상태표(자산)(11.06월 이후)",
+                "SD104": "요약재무상태표(부채 및 자본)(11.06월 이후)",
+                "SD010": "수익성",
+                "SD012": "부문별 손익(수수료)",
+                "SD017": "부문별 손익(판매비와 관리비)",
+            },
+        },
     },
     "planning_framework": {
         "step1_data_needs": "질문에서 필요한 데이터 항목 구체적으로 파악 (어떤 재무항목? 어떤 기간? 어떤 대상?)",
@@ -292,6 +326,8 @@ _DATA_CATALOG = {
 
 # 세션 내 카탈로그 전달 여부 추적 (첫 호출에만 전체 전달)
 _catalog_delivered = False
+# plan_data_query 호출 여부 추적 (미호출 시 데이터 도구가 힌트 포함)
+_plan_called = False
 
 
 @mcp.tool()
@@ -309,7 +345,8 @@ async def plan_data_query(question: str) -> str:
     Args:
         question: 사용자의 원래 질문 (예: "시중은행 판관비 비교", "삼성전자 재무제표")
     """
-    global _catalog_delivered
+    global _catalog_delivered, _plan_called
+    _plan_called = True
 
     if not question or not question.strip():
         raise ValueError("question은 비어있을 수 없습니다")
@@ -332,6 +369,19 @@ async def plan_data_query(question: str) -> str:
             "note": "데이터 카탈로그는 이미 전달됨. 이전 카탈로그를 참고하여 planning_framework 5단계에 따라 수집 전략을 수립하세요.",
             "planning_framework_reminder": _DATA_CATALOG["planning_framework"],
         })
+
+
+def _plan_hint(result: Any) -> str:
+    """plan_data_query 미호출 시 결과에 라우팅 힌트를 추가해 반환.
+
+    데이터는 그대로 반환하되, 다음 질문을 위해 plan_data_query 사용을 권장합니다.
+    """
+    if _plan_called:
+        return _json(result)
+    return _json({
+        "hint": "다음 질문부터는 plan_data_query를 먼저 호출하면 DART/FISIS 최적 경로를 자동으로 선택해 API 호출 횟수와 토큰을 절약할 수 있습니다.",
+        "data": result,
+    })
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -360,7 +410,7 @@ async def dart_search_company(name: str, limit: int = 20) -> str:
     results = await _dart().search_company(name, limit)
     if not results:
         return f"'{name}'에 대한 검색 결과가 없습니다."
-    return _json([_drop_empty(r) for r in results])
+    return _plan_hint([_drop_empty(r) for r in results])
 
 
 @mcp.tool()
@@ -456,7 +506,7 @@ async def dart_financial_statements(
 
     data = await _dart().get_financial_statements(corp_code, bsns_year, reprt_code)
     items = [_compact_fin_row(r) for r in data.get("list", []) or []]
-    return _json(items)
+    return _plan_hint(items)
 
 
 @mcp.tool()
@@ -539,7 +589,7 @@ async def dart_multi_company_financials(
 
     data = await _dart().get_multi_company_financials(corp_codes, bsns_year, reprt_code)
     items = [_compact_fin_row(r) for r in data.get("list", []) or []]
-    return _json(items)
+    return _plan_hint(items)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -578,10 +628,11 @@ async def fisis_get_statistics(
 ) -> str:
     """FISIS에서 금융통계 데이터를 조회합니다.
 
-    통계코드는 fisis_list_statistics 로 먼저 확인하세요.
+    stat_cd는 fisis_list_statistics 결과의 list_no 필드값입니다.
+    plan_data_query의 common_stat_codes에 주요 코드가 정리되어 있으니 먼저 확인하세요.
 
     Args:
-        stat_cd: 통계코드
+        stat_cd: 통계코드 (fisis_list_statistics 결과의 list_no 필드값, 예: "SA021")
         strt_yymm: 조회 시작월 (YYYYMM, 예: "202401")
         end_yymm: 조회 종료월 (YYYYMM, 예: "202412")
         finance_cd: 금융회사코드 (비워두면 전체)

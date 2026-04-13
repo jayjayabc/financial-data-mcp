@@ -553,8 +553,14 @@ async def dart_search_companies(names: list[str], limit: int = 5) -> str:
             "results": [_drop_empty(r) for r in results] if results else [],
         }
 
-    all_results = await asyncio.gather(*[_search(n) for n in names])
-    return _plan_hint(list(all_results))
+    raw = await asyncio.gather(*[_search(n) for n in names], return_exceptions=True)
+    all_results = []
+    for name, item in zip(names, raw):
+        if isinstance(item, Exception):
+            all_results.append({"query": name.strip(), "error": str(item)})
+        else:
+            all_results.append(item)
+    return _plan_hint(all_results)
 
 
 @mcp.tool()
@@ -743,8 +749,13 @@ async def dart_multi_company_financials(
     if len(chunks) == 1:
         items = await _fetch_chunk(chunks[0])
     else:
-        results = await asyncio.gather(*[_fetch_chunk(c) for c in chunks])
-        items = [row for chunk in results for row in chunk]
+        raw = await asyncio.gather(*[_fetch_chunk(c) for c in chunks], return_exceptions=True)
+        items = []
+        for i, result in enumerate(raw):
+            if isinstance(result, Exception):
+                logger.warning("multi_company chunk %d failed: %s", i, result)
+            else:
+                items.extend(result)
 
     return _plan_hint(items)
 
@@ -787,8 +798,14 @@ async def dart_financial_statements_multi_year(
         rows = [_compact_fin_row(r) for r in data.get("list", []) or []]
         return {"year": year, "data": rows}
 
-    results = await asyncio.gather(*[_fetch(y) for y in years])
-    return _plan_hint(list(results))
+    raw = await asyncio.gather(*[_fetch(y) for y in years], return_exceptions=True)
+    results = []
+    for year, item in zip(years, raw):
+        if isinstance(item, Exception):
+            results.append({"year": year, "error": str(item)})
+        else:
+            results.append(item)
+    return _plan_hint(results)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -903,8 +920,14 @@ async def fisis_get_multi_statistics(
         )
         return {"stat_cd": code, "data": _fisis_compact_list(data)}
 
-    results = await asyncio.gather(*[_fetch(c) for c in stat_codes])
-    return _json(list(results))
+    raw = await asyncio.gather(*[_fetch(c) for c in stat_codes], return_exceptions=True)
+    results = []
+    for code, item in zip(stat_codes, raw):
+        if isinstance(item, Exception):
+            results.append({"stat_cd": code, "error": str(item)})
+        else:
+            results.append(item)
+    return _json(results)
 
 
 @mcp.tool()

@@ -15,3 +15,6 @@ venv/
 # 불필요 파일
 screenshot*.png
 PLAN.md
+
+# 평가 파이프라인 결과물 (API 응답 데이터, 대용량 차트 포함)
+eval/results/

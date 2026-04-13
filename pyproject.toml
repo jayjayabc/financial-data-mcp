@@ -16,6 +16,10 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
 ]
+eval = [
+    "plotly>=5.0.0",
+    "pandas>=2.0.0",
+]
 
 [project.scripts]
 financial-data-mcp = "financial_data_mcp.server:main"

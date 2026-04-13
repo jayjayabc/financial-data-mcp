@@ -439,6 +439,69 @@ _DATA_CATALOG = {
         "step4_tool_sequence": "최소 호출로 데이터를 수집하는 구체적 도구 호출 순서 수립",
         "step5_fallback": "1차 소스에서 데이터가 부족하면 다른 소스로 보완할 계획 포함",
     },
+    "key_stat_codes_by_sector": {
+        "note": (
+            "업권별 분석 시 아래 코드를 우선 활용. "
+            "2개 이상 조회 시 반드시 fisis_get_multi_statistics 사용."
+        ),
+        "업권_전체_집계_vs_개별_기관": (
+            "업권 전체 집계: lrg_div만 지정(finance_cd 생략) → 해당 업권 전체 합산 데이터 반환. "
+            "개별 기관 조회: finance_cd를 지정(fisis_list_companies로 먼저 확인). "
+            "업권 전체 집계 시 fisis_list_statistics에서 '합계' 또는 '전체' 포함 코드를 우선 탐색."
+        ),
+        "은행(lrg_div=A)": {
+            "수익성_ROA_ROE_NIM": "SA017",
+            "BIS비율_Tier1_보통주자본": "SA053",
+            "여신건전성_고정이하여신비율": "SA015",
+            "연체율_원화대출": "SA040",
+            "부실채권비율_NPL": "SA054",
+            "대손충당금": "SA025",
+        },
+        "여신전문_카드(lrg_div=C)": {
+            "요약손익계산서_최신(18.12이후)": "SC218",
+            "여신건전성": "SC008",
+            "연체채권비율": "SC117",
+            "수익성": "SC009",
+            "자본적정성": "SC007",
+        },
+        "금융투자(lrg_div=D)": {
+            "수익성_ROA_ROE": "SD010",
+            "여신건전성": "SD009",
+            "자본적정성": "SD008",
+        },
+        "업권_공통_연체율_코드": {
+            "은행": "SA040",
+            "여신전문(카드_캐피탈_리스_할부)": "SC117",
+            "금융투자": "SD009",
+        },
+    },
+    "dart_fisis_cross_analysis": {
+        "description": "DART 개별 기업 분석 시 FISIS 병행 조회가 필요한 지표 목록",
+        "dart_to_fisis_bridge_flow": (
+            "1. dart_to_fisis_bridge(corp_code) → is_financial 여부 및 fisis_lrg_div 확인. "
+            "2. fisis_list_companies(lrg_div) → finance_cd 확인. "
+            "3. fisis_get_multi_statistics([코드목록], finance_cd=...) → 개별 기관 통계 조회."
+        ),
+        "indicators_requiring_fisis": [
+            "BIS비율·Tier1 (은행: SA053, 카드·여전: SC007)",
+            "NPL·부실채권비율 (은행: SA054)",
+            "연체율 (은행: SA040, 여전: SC117)",
+            "NIM·ROA·ROE (은행: SA017, 금융투자: SD010)",
+            "카드 요약손익 영업수익 구성비 (SC218 — DART 계정보다 업권 표준 상세)",
+        ],
+        "non_interest_income_accounts_dart": {
+            "description": "비이자이익 완전 포착을 위한 DART 재무제표 계정 목록",
+            "accounts": [
+                "수수료이익 (fee income)",
+                "트레이딩손익 (trading P&L — 유가증권평가·처분·파생상품 포함)",
+                "보험손익 (insurance P&L)",
+                "신탁보수수익 (trust fee)",
+                "기타영업손익 (other operating income/expense)",
+                "외환·외화환산손익",
+            ],
+            "tip": "dart_full_financial_statements(sj_div='IS')로 전체 손익계산서 조회 후 해당 계정 합산",
+        },
+    },
 }
 
 
@@ -756,8 +819,21 @@ async def dart_full_financial_statements(
     items = [_compact_fin_row(r) for r in rows]
 
     if fallback_used:
+        if not items:
+            # OFS도 비어있으면 대안 도구 안내
+            return _json({
+                "note": "CFS 및 OFS 데이터 모두 없습니다. dart_financial_statements 또는 dart_screen_report로 대안 조회를 시도하세요.",
+                "list": [],
+            })
         # LLM에게 폴백 사실을 알림
         return _json({"note": "CFS 데이터 없음 - OFS(개별재무제표)로 폴백", "list": items})
+
+    if not items:
+        # CFS 직접 조회 결과도 비어있으면 대안 도구 안내
+        return _json({
+            "note": "데이터가 없습니다. dart_financial_statements 또는 dart_screen_report로 대안 조회를 시도하세요.",
+            "list": [],
+        })
     return _json(items)
 
 
@@ -917,7 +993,23 @@ async def dart_business_report(
         )
 
     endpoint, description = BUSINESS_REPORT_TYPES[report_type]
-    data = await _dart().get_business_report(endpoint, corp_code, bsns_year, reprt_code)
+
+    try:
+        data = await _dart().get_business_report(endpoint, corp_code, bsns_year, reprt_code)
+    except (RuntimeError, Exception) as e:
+        # new_capital_securities API 호출 실패 시 대안 도구 안내
+        if report_type == "new_capital_securities":
+            return _json({
+                "report_type": report_type,
+                "description": description,
+                "error": str(e),
+                "fallback_suggestion": (
+                    "API 호출에 실패했습니다. "
+                    "dart_search_disclosures에서 '신종자본증권 발행' 키워드로 공시를 검색하세요. "
+                    "예: dart_search_disclosures(corp_code=corp_code, pblntf_ty='C')"
+                ),
+            })
+        raise
 
     items = data.get("list", []) or []
     compacted = [_drop_empty(_strip_dart_meta(item)) if isinstance(item, dict) else item for item in items]
@@ -1063,6 +1155,8 @@ async def fisis_get_statistics(
     term: str = "Q",
 ) -> str:
     """FISIS에서 금융통계 데이터를 조회합니다.
+
+    **단일 코드 1회 조회 전용. 복수 코드 조회 시 반드시 fisis_get_multi_statistics를 사용하세요.**
 
     stat_cd는 fisis_list_statistics 결과의 list_no 필드값입니다.
     plan_data_query의 common_stat_codes에 주요 코드가 정리되어 있으니 먼저 확인하세요.

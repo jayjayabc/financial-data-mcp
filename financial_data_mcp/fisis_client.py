@@ -81,7 +81,16 @@ class FisisClient:
 
         try:
             data = await with_retry(_do, label=f"FISIS {endpoint}")
-        except (httpx.HTTPStatusError, httpx.TransportError, httpx.TimeoutException) as e:
+        except httpx.HTTPStatusError as e:
+            # 응답 크기 초과(413) 또는 페이로드 한도 초과 시 분할 조회 안내
+            if e.response.status_code in (413, 414, 431):
+                raise RuntimeError(
+                    f"FISIS API 응답 크기 초과 [{e.response.status_code}]: "
+                    "연도 범위를 줄이거나 기관을 분리하여 재시도하세요. "
+                    f"원본 오류: {e}"
+                ) from e
+            raise translate_http_error("FISIS", e) from e
+        except (httpx.TransportError, httpx.TimeoutException) as e:
             raise translate_http_error("FISIS", e) from e
 
         # FISIS 응답 스키마는 엔드포인트마다 다를 수 있어 방어적으로 에러 체크
@@ -107,6 +116,13 @@ class FisisClient:
             code = obj.get("err_cd") or obj.get("errCd") or ""
             if msg and msg not in ("정상", "성공", "success"):
                 suffix = f" [{code}]" if code else ""
+                # 응답 크기 초과 관련 오류 감지 시 분할 조회 안내
+                size_keywords = ("크기", "용량", "초과", "limit", "size", "large", "too big")
+                if any(kw in msg.lower() for kw in size_keywords):
+                    raise RuntimeError(
+                        f"FISIS API 응답 크기 초과{suffix}: {msg}. "
+                        "연도 범위를 줄이거나 기관을 분리하여 재시도하세요."
+                    )
                 raise RuntimeError(f"FISIS API 오류{suffix}: {msg}")
 
         _check(data)

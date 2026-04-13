@@ -19,7 +19,10 @@ import logging
 import xml.etree.ElementTree as ET
 import zipfile
 
+import re
+
 import httpx
+from bs4 import BeautifulSoup
 
 from ._cache import TTLCache, load_disk_cache, save_disk_cache
 from ._http import mask_params, translate_http_error, with_retry
@@ -28,6 +31,7 @@ from ._quota import QuotaTracker
 logger = logging.getLogger("financial_data_mcp.dart")
 
 BASE_URL = "https://opendart.fss.or.kr/api"
+DART_VIEWER_BASE = "https://dart.fss.or.kr"
 CORP_CODE_CACHE_NAME = "dart_corp_codes"
 CORP_CODE_TTL_SECONDS = 30 * 86400  # 30일
 RESPONSE_TTL_SECONDS = 3600  # 1시간
@@ -75,6 +79,12 @@ class DartClient:
             timeout=httpx.Timeout(30.0, connect=10.0),
             headers={"User-Agent": "financial-data-mcp/0.1"},
         )
+        self._viewer_client = httpx.AsyncClient(
+            base_url=DART_VIEWER_BASE,
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            headers={"User-Agent": "financial-data-mcp/0.1"},
+            follow_redirects=True,
+        )
         self._response_cache = TTLCache(
             ttl_seconds=RESPONSE_TTL_SECONDS, max_size=256
         )
@@ -83,6 +93,7 @@ class DartClient:
     async def aclose(self) -> None:
         """내부 httpx 클라이언트 종료."""
         await self._client.aclose()
+        await self._viewer_client.aclose()
 
     # ── 내부 HTTP 헬퍼 ─────────────────────────────────────────
 
@@ -297,3 +308,130 @@ class DartClient:
             },
             use_cache=True,
         )
+
+    # ── DART 공시 문서 뷰어 ────────────────────────────────────
+
+    # DART main.do 페이지에서 TreeNode JS를 파싱하여 dcmNo/eleId 추출
+    _TREE_NODE_RE = re.compile(
+        r'new\s+TreeNode\(\s*"([^"]*?)"\s*,\s*"([^"]*?)"\s*\)'
+    )
+    _DCM_NO_RE = re.compile(r"dcmNo=(\d+)")
+    _ELE_ID_RE = re.compile(r"eleId=(\d+)")
+
+    async def get_document_list(self, rcp_no: str) -> list[dict]:
+        """공시 접수번호(rcept_no)에 해당하는 문서 섹션 목록을 반환.
+
+        DART main.do 페이지의 TreeNode JavaScript를 파싱하여
+        각 섹션의 dcm_no, ele_id, title을 추출합니다.
+        """
+        async def _do() -> httpx.Response:
+            resp = await self._viewer_client.get(
+                "/dsaf001/main.do",
+                params={"rcpNo": rcp_no},
+            )
+            resp.raise_for_status()
+            return resp
+
+        try:
+            resp = await with_retry(_do, label=f"DART viewer main.do/{rcp_no}")
+        except (httpx.HTTPStatusError, httpx.TransportError, httpx.TimeoutException) as e:
+            raise translate_http_error("DART viewer", e) from e
+
+        html = resp.text
+        sections: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+
+        for match in self._TREE_NODE_RE.finditer(html):
+            title = match.group(1).strip()
+            url_fragment = match.group(2)
+
+            dcm_match = self._DCM_NO_RE.search(url_fragment)
+            ele_match = self._ELE_ID_RE.search(url_fragment)
+            if not dcm_match:
+                continue
+
+            dcm_no = dcm_match.group(1)
+            ele_id = ele_match.group(1) if ele_match else "0"
+            key = (dcm_no, ele_id)
+
+            if key not in seen:
+                seen.add(key)
+                sections.append({
+                    "dcm_no": dcm_no,
+                    "ele_id": ele_id,
+                    "title": title,
+                })
+
+        return sections
+
+    async def read_document(
+        self,
+        rcp_no: str,
+        dcm_no: str,
+        ele_id: str = "0",
+    ) -> str:
+        """공시 문서의 특정 섹션 HTML을 가져와 텍스트로 변환.
+
+        DART viewer.do 페이지에서 HTML을 다운로드하고
+        BeautifulSoup으로 테이블/텍스트를 추출합니다.
+        """
+        params = {
+            "rcpNo": rcp_no,
+            "dcmNo": dcm_no,
+            "eleId": ele_id,
+            "offset": "0",
+            "length": "9999999",
+            "dtd": "dart4.xsd",
+        }
+
+        async def _do() -> httpx.Response:
+            resp = await self._viewer_client.get(
+                "/report/viewer.do",
+                params=params,
+            )
+            resp.raise_for_status()
+            return resp
+
+        try:
+            resp = await with_retry(_do, label=f"DART viewer/{rcp_no}/{dcm_no}/{ele_id}")
+        except (httpx.HTTPStatusError, httpx.TransportError, httpx.TimeoutException) as e:
+            raise translate_http_error("DART viewer", e) from e
+
+        return self._parse_viewer_html(resp.text)
+
+    @staticmethod
+    def _parse_viewer_html(html: str) -> str:
+        """DART viewer HTML에서 재무 테이블과 텍스트를 추출."""
+        soup = BeautifulSoup(html, "html.parser")
+
+        # 스크립트/스타일 태그 제거
+        for tag in soup.find_all(["script", "style"]):
+            tag.decompose()
+
+        parts: list[str] = []
+
+        # 테이블 추출 (재무제표의 핵심)
+        tables = soup.find_all("table")
+        if tables:
+            for table in tables:
+                rows: list[list[str]] = []
+                for tr in table.find_all("tr"):
+                    cells = []
+                    for td in tr.find_all(["td", "th"]):
+                        text = td.get_text(strip=True)
+                        # colspan/rowspan 으로 인한 빈 셀도 포함
+                        cells.append(text)
+                    if any(cells):  # 완전히 빈 행 제외
+                        rows.append(cells)
+                if rows:
+                    # TSV 형식으로 변환 (토큰 효율적)
+                    table_text = "\n".join("\t".join(cells) for cells in rows)
+                    parts.append(table_text)
+        else:
+            # 테이블이 없으면 전체 텍스트 추출
+            text = soup.get_text(separator="\n", strip=True)
+            # 연속 빈줄 제거
+            lines = [line for line in text.splitlines() if line.strip()]
+            parts.append("\n".join(lines))
+
+        return "\n\n".join(parts) if parts else "(내용 없음)"

@@ -268,7 +268,7 @@ _DATA_CATALOG = {
         },
         "granularity": "업권 전체 또는 개별 금융기관. 1회 호출 = 업권 전체 데이터.",
         "period": "월별 (YYYYMM ~ YYYYMM 범위 지정)",
-        "lrg_div": {"A": "은행(국내은행)", "B": "비은행(신탁회사)", "C": "여신전문금융사·카드사", "D": "금융투자(증권·자산운용)"},
+        "lrg_div": {"A": "은행(국내은행)", "B": "비은행(신탁회사)", "C": "여신전문금융사(카드·캐피탈·할부금융·리스 — sml_div 필수)", "D": "금융투자(증권·자산운용)"},
         "strength": [
             "1회 호출로 업권 전체 금융기관 데이터 조회",
             "금감원 표준 양식으로 기관 간 항목명 일관",
@@ -402,6 +402,26 @@ _DATA_CATALOG = {
         "step3_cost_estimation": "예상 API 호출 횟수 산정 (DART: 기업수×호출, FISIS: 1~2회)",
         "step4_tool_sequence": "최소 호출로 데이터를 수집하는 구체적 도구 호출 순서 수립",
         "step5_fallback": "1차 소스에서 데이터가 부족하면 다른 소스로 보완할 계획 포함",
+    },
+    "unlisted_company_pattern": {
+        "description": (
+            "비상장 기타법인(corp_cls=E)은 XBRL 재무제표를 제출하지 않아 "
+            "dart_financial_statements / dart_full_financial_statements가 빈 배열을 반환합니다. "
+            "캐피탈사, 저축은행, 할부금융사, 리스사, 소규모 금융사, 비상장 일반기업 등이 해당됩니다."
+        ),
+        "detection_hints": [
+            "회사명에 '캐피탈', '저축은행', '할부금융', '리스' 등이 포함된 경우",
+            "dart_search_company 결과에서 stock_code가 비어있는 경우",
+            "dart_company_overview에서 corp_cls='E'인 경우",
+        ],
+        "recommended_flow": [
+            "1. dart_search_company → corp_code 확인 (stock_code 비어있으면 비상장 가능성)",
+            "2. dart_company_overview → corp_cls 확인 (E=기타법인=비상장)",
+            "3. corp_cls=E이면: dart_search_disclosures(corp_code=..., pblntf_ty='F') → 감사보고서 접수번호(rcept_no) 수집",
+            "4. dart_get_document_list(rcp_no='접수번호') → 문서 내 섹션별 dcm_no/ele_id 목록 확인",
+            "5. dart_read_document(rcp_no=..., dcm_no=..., ele_id='재무표 섹션') → 감사보고서에서 재무표 텍스트 직접 추출",
+        ],
+        "note": "비상장법인도 dart_search_disclosures로 공시 검색은 가능합니다. XBRL 재무제표 API만 지원되지 않습니다.",
     },
 }
 
@@ -586,8 +606,33 @@ async def dart_financial_statements(
     v.validate_year(bsns_year)
     v.validate_report_code(reprt_code)
 
-    data = await _dart().get_financial_statements(corp_code, bsns_year, reprt_code)
+    client = _dart()
+    data = await client.get_financial_statements(corp_code, bsns_year, reprt_code)
     items = [_compact_fin_row(r) for r in data.get("list", []) or []]
+
+    # 비상장 기타법인(corp_cls=E) 감지: XBRL 미제출 기업은 빈 결과 반환
+    if not items:
+        try:
+            overview = await client.get_company_overview(corp_code)
+            corp_cls = overview.get("corp_cls", "")
+            corp_name = overview.get("corp_name", corp_code)
+            if corp_cls == "E":
+                return _json({
+                    "data": [],
+                    "note": (
+                        f"'{corp_name}'은(는) 기타법인(비상장, corp_cls=E)으로 "
+                        "XBRL 재무제표를 제출하지 않아 이 API로 조회할 수 없습니다. "
+                        "감사보고서(PDF/HTML)에서 직접 재무데이터를 추출해야 합니다."
+                    ),
+                    "suggested_steps": [
+                        f"dart_search_disclosures(corp_code='{corp_code}', pblntf_ty='F') → 감사보고서 검색",
+                        "dart_get_document_list(rcp_no='접수번호') → 문서 섹션 목록 확인",
+                        "dart_read_document(rcp_no='접수번호', dcm_no='문서번호', ele_id='섹션번호') → 재무표 텍스트 추출",
+                    ],
+                })
+        except Exception:
+            pass  # 기업개황 조회 실패 시 원래 빈 결과 반환
+
     return _plan_hint(items)
 
 
@@ -637,6 +682,29 @@ async def dart_full_financial_statements(
         rows = data.get("list", []) or []
         fallback_used = True
 
+    # 비상장 기타법인(corp_cls=E) 감지: XBRL 미제출 기업은 빈 결과 반환
+    if not rows:
+        try:
+            overview = await client.get_company_overview(corp_code)
+            corp_cls = overview.get("corp_cls", "")
+            corp_name = overview.get("corp_name", corp_code)
+            if corp_cls == "E":
+                return _json({
+                    "data": [],
+                    "note": (
+                        f"'{corp_name}'은(는) 기타법인(비상장, corp_cls=E)으로 "
+                        "XBRL 재무제표를 제출하지 않아 이 API로 조회할 수 없습니다. "
+                        "감사보고서(PDF/HTML)에서 직접 재무데이터를 추출해야 합니다."
+                    ),
+                    "suggested_steps": [
+                        f"dart_search_disclosures(corp_code='{corp_code}', pblntf_ty='F') → 감사보고서 검색",
+                        "dart_get_document_list(rcp_no='접수번호') → 문서 섹션 목록 확인",
+                        "dart_read_document(rcp_no='접수번호', dcm_no='문서번호', ele_id='섹션번호') → 재무표 텍스트 추출",
+                    ],
+                })
+        except Exception:
+            pass  # 기업개황 조회 실패 시 원래 빈 결과 반환
+
     if sj_div:
         rows = [r for r in rows if r.get("sj_div") == sj_div]
 
@@ -672,6 +740,69 @@ async def dart_multi_company_financials(
     data = await _dart().get_multi_company_financials(corp_codes, bsns_year, reprt_code)
     items = [_compact_fin_row(r) for r in data.get("list", []) or []]
     return _plan_hint(items)
+
+
+@mcp.tool()
+@_tool_safe
+async def dart_get_document_list(rcp_no: str) -> str:
+    """DART 공시의 문서 섹션 목록(dcm_no, ele_id, 제목)을 반환합니다.
+
+    감사보고서 등 공시 문서의 내부 구조를 파악할 때 사용합니다.
+    반환된 dcm_no와 ele_id를 dart_read_document에 전달하면
+    해당 섹션의 내용을 텍스트로 추출할 수 있습니다.
+
+    비상장법인의 재무데이터 추출 흐름:
+    1. dart_search_disclosures(pblntf_ty='F') → 감사보고서 rcept_no 확인
+    2. dart_get_document_list(rcp_no=rcept_no) → 섹션 목록에서 재무표 위치 확인
+    3. dart_read_document(rcp_no, dcm_no, ele_id) → 재무표 텍스트 추출
+
+    Args:
+        rcp_no: 접수번호 (dart_search_disclosures 결과의 rcept_no)
+    """
+    if not rcp_no or not rcp_no.strip():
+        raise ValueError("rcp_no는 비어있을 수 없습니다")
+
+    sections = await _dart().get_document_list(rcp_no.strip())
+    if not sections:
+        return _json({
+            "data": [],
+            "note": f"접수번호 '{rcp_no}'에 대한 문서 섹션을 찾지 못했습니다. 접수번호가 정확한지 확인하세요.",
+        })
+    return _json(sections)
+
+
+@mcp.tool()
+@_tool_safe
+async def dart_read_document(
+    rcp_no: str,
+    dcm_no: str,
+    ele_id: str = "0",
+) -> str:
+    """DART 공시 문서의 특정 섹션 텍스트를 반환합니다.
+
+    비상장법인의 감사보고서에서 재무제표(재무상태표, 손익계산서 등)를
+    직접 추출할 때 사용합니다. 테이블은 TSV 형식으로 변환됩니다.
+
+    dart_get_document_list로 dcm_no와 ele_id를 먼저 확인하세요.
+
+    Args:
+        rcp_no: 접수번호 (dart_search_disclosures 결과의 rcept_no)
+        dcm_no: 문서번호 (dart_get_document_list 결과의 dcm_no)
+        ele_id: 섹션번호 (dart_get_document_list 결과의 ele_id, 기본 "0")
+    """
+    if not rcp_no or not rcp_no.strip():
+        raise ValueError("rcp_no는 비어있을 수 없습니다")
+    if not dcm_no or not dcm_no.strip():
+        raise ValueError("dcm_no는 비어있을 수 없습니다. dart_get_document_list로 먼저 확인하세요.")
+
+    text = await _dart().read_document(rcp_no.strip(), dcm_no.strip(), ele_id.strip())
+
+    # 응답 크기 제한 (LLM 컨텍스트 보호, 약 100KB)
+    max_len = 100_000
+    if len(text) > max_len:
+        text = text[:max_len] + f"\n\n... (총 {len(text):,}자 중 {max_len:,}자만 반환. 더 작은 ele_id 섹션을 지정하세요)"
+
+    return text
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -751,9 +882,21 @@ async def fisis_list_companies(
 
     특정 권역의 회사 목록과 finance_cd 를 확인할 때 사용.
 
+    **sml_div를 비워두면 해당 대분류의 첫 번째 소분류만 반환될 수 있습니다.**
+    캐피탈사/할부금융사/리스사를 조회하려면 반드시 sml_div를 지정하세요.
+
+    대분류별 주요 sml_div 값:
+    - lrg_div=A (은행): "시중은행", "지방은행", "특수은행"
+    - lrg_div=C (여신전문금융사):
+      - "신용카드사": 전업카드사 (삼성·현대·KB국민·신한·롯데·우리·하나·BC)
+      - "할부금융사": 캐피탈사/할부금융 (현대캐피탈·KB캐피탈·NBH캐피탈 등)
+      - "리스사": 리스전업사
+      - "신기술사업금융사": 신기술금융사
+    - lrg_div=D (금융투자): "증권회사", "자산운용사", "선물회사"
+
     Args:
-        lrg_div: 대분류 (A=은행, B=비은행, C=보험, D=금융투자)
-        sml_div: 소분류
+        lrg_div: 대분류 (A=은행, B=비은행, C=여신전문금융사, D=금융투자)
+        sml_div: 소분류 (위 목록 참고. 비워두면 기본 소분류만 반환)
         finance_cd: 금융회사코드 (특정 회사만 조회 시)
     """
     data = await _fisis().list_companies(lrg_div, sml_div, finance_cd)

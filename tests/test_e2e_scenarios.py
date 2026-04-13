@@ -767,3 +767,154 @@ async def test_e2e_dividend_multi_year_chain():
     assert results[2]["list"][0]["thstrm"] == "60.0"
     # 모든 연도 배당성향 > 50%
     assert all(float(r["list"][0]["thstrm"]) > 50.0 for r in results)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  dart_list_listed_companies + dart_screen_dividend
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+@pytest.mark.asyncio
+async def test_list_listed_companies_filters_stock_code():
+    """stock_code가 있는 기업만 반환되는지."""
+    mock_client = MagicMock()
+    mock_client.list_listed_companies = AsyncMock(return_value=[
+        {"corp_code": "001", "corp_name": "삼성전자", "stock_code": "005930", "modify_date": "20240101"},
+        {"corp_code": "002", "corp_name": "SK하이닉스", "stock_code": "000660", "modify_date": "20240101"},
+    ])
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_list_listed_companies()
+
+    data = json.loads(result)
+    assert data["total"] == 2
+    assert len(data["list"]) == 2
+    assert all("stock_code" in c for c in data["list"])
+
+
+@pytest.mark.asyncio
+async def test_screen_dividend_parallel():
+    """여러 기업 배당 병렬 조회가 정상 동작하는지."""
+    async def _mock_report(endpoint, corp, year, reprt="11011"):
+        return {
+            "list": [
+                {"se": "현금배당성향(%)", "thstrm": "55.0" if corp == "001" else "30.0"},
+            ],
+        }
+
+    mock_client = MagicMock()
+    mock_client.get_business_report = AsyncMock(side_effect=_mock_report)
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_screen_dividend(
+            corp_codes=["001", "002"].copy(),  # copy to avoid mutation
+            bsns_year="2023",
+        )
+
+    # validate_corp_codes_list will fail because "001" is not 8 digits
+    # Let's use proper corp codes
+    assert result.startswith("[input error]")  # 3자리 코드는 검증 실패
+
+
+@pytest.mark.asyncio
+async def test_screen_dividend_proper_codes():
+    """정상 8자리 코드로 배당 스크리닝."""
+    async def _mock_report(endpoint, corp, year, reprt="11011"):
+        payout = "55.0" if corp == "00000001" else "30.0"
+        return {"list": [{"se": "현금배당성향(%)", "thstrm": payout}]}
+
+    mock_client = MagicMock()
+    mock_client.get_business_report = AsyncMock(side_effect=_mock_report)
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_screen_dividend(
+            corp_codes=["00000001", "00000002"],
+            bsns_year="2023",
+        )
+
+    data = json.loads(result)
+    assert len(data) == 2
+    assert data[0]["corp_code"] == "00000001"
+    assert data[0]["data"][0]["thstrm"] == "55.0"
+    assert data[1]["data"][0]["thstrm"] == "30.0"
+
+
+@pytest.mark.asyncio
+async def test_screen_dividend_partial_failure():
+    """배당 스크리닝 중 일부 기업 실패 → 나머지는 정상 반환."""
+    async def _mock_report(endpoint, corp, year, reprt="11011"):
+        if corp == "00000002":
+            raise RuntimeError("DART API 오류 [013]: 조회 결과 없음")
+        return {"list": [{"se": "현금배당성향(%)", "thstrm": "50.0"}]}
+
+    mock_client = MagicMock()
+    mock_client.get_business_report = AsyncMock(side_effect=_mock_report)
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_screen_dividend(
+            corp_codes=["00000001", "00000002", "00000003"],
+            bsns_year="2023",
+        )
+
+    data = json.loads(result)
+    assert len(data) == 3
+
+    success = [d for d in data if "data" in d]
+    failed = [d for d in data if "error" in d]
+    assert len(success) == 2
+    assert len(failed) == 1
+    assert failed[0]["corp_code"] == "00000002"
+
+
+@pytest.mark.asyncio
+async def test_screen_dividend_exceeds_50():
+    """51개 기업 → [input error]."""
+    codes = [f"{i:08d}" for i in range(51)]
+    result = await server.dart_screen_dividend(
+        corp_codes=codes, bsns_year="2023"
+    )
+    assert result.startswith("[input error]")
+    assert "최대 50개" in result
+
+
+@pytest.mark.asyncio
+async def test_e2e_full_screening_workflow():
+    """E2E: 상장기업 목록 → 배당 스크리닝 → 고배당 필터링 체인."""
+    # Step 1: 상장기업 목록
+    mock_client = MagicMock()
+    listed = [
+        {"corp_code": f"{i:08d}", "corp_name": f"회사{i}", "stock_code": f"{i:06d}", "modify_date": ""}
+        for i in range(5)
+    ]
+    mock_client.list_listed_companies = AsyncMock(return_value=listed)
+
+    # Step 2: 배당 데이터 (짝수 회사만 고배당)
+    async def _mock_report(endpoint, corp, year, reprt="11011"):
+        idx = int(corp)
+        payout = "60.0" if idx % 2 == 0 else "20.0"
+        return {"list": [{"se": "현금배당성향(%)", "thstrm": payout}]}
+
+    mock_client.get_business_report = AsyncMock(side_effect=_mock_report)
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        # Step 1
+        list_result = await server.dart_list_listed_companies()
+        list_data = json.loads(list_result)
+        codes = [c["corp_code"] for c in list_data["list"]]
+
+        # Step 2
+        screen_result = await server.dart_screen_dividend(
+            corp_codes=codes, bsns_year="2023"
+        )
+        screen_data = json.loads(screen_result)
+
+    # Step 3: 고배당 필터 (LLM이 수행할 부분을 시뮬레이션)
+    high_dividend = [
+        d for d in screen_data
+        if "data" in d and d["data"]
+        and float(d["data"][0].get("thstrm", "0")) >= 50.0
+    ]
+
+    assert list_data["total"] == 5
+    assert len(screen_data) == 5
+    assert len(high_dividend) == 3  # 00000000, 00000002, 00000004

@@ -937,6 +937,76 @@ async def dart_business_report(
     })
 
 
+@mcp.tool()
+@_tool_safe
+async def dart_list_listed_companies() -> str:
+    """DART에 등록된 전체 상장기업 목록을 반환합니다.
+
+    API 호출 없음 — 기업코드 캐시(약 90,000건)에서 stock_code가 있는 기업만 필터.
+    약 2,500~3,000개 상장기업의 corp_code, corp_name, stock_code를 반환합니다.
+
+    이 목록을 기반으로 dart_business_report, dart_multi_company_financials 등
+    후속 도구를 호출하여 스크리닝 분석을 수행할 수 있습니다.
+
+    예시 워크플로우:
+    1. dart_list_listed_companies → 전체 상장기업 목록 확보
+    2. dart_multi_company_financials로 재무 데이터 수집 (최대 100개씩)
+    3. dart_business_report(report_type="dividend")로 배당 데이터 조회
+    """
+    companies = await _dart().list_listed_companies()
+    return _json({
+        "total": len(companies),
+        "list": [_drop_empty(c) for c in companies],
+    })
+
+
+@mcp.tool()
+@_tool_safe
+async def dart_screen_dividend(
+    corp_codes: list[str],
+    bsns_year: str,
+    reprt_code: str = "11011",
+) -> str:
+    """여러 기업의 배당 정보를 한번에 병렬 조회하여 스크리닝합니다.
+
+    고배당주 탐색, 배당성향 비교 등에 활용.
+    최대 50개 기업까지 지원하며, asyncio.gather로 병렬 실행됩니다.
+    부분 실패 시 실패한 기업만 error 표시, 나머지는 정상 반환.
+
+    Args:
+        corp_codes: 기업코드 리스트 (1~50개)
+        bsns_year: 사업연도 (YYYY)
+        reprt_code: 보고서코드 (11011=사업보고서)
+    """
+    v.validate_corp_codes_list(corp_codes, max_count=50)
+    v.validate_year(bsns_year)
+    v.validate_report_code(reprt_code)
+
+    client = _dart()
+
+    async def _fetch(code: str) -> dict:
+        data = await client.get_business_report(
+            "alotMatter.json", code, bsns_year, reprt_code
+        )
+        items = data.get("list", []) or []
+        return {
+            "corp_code": code,
+            "data": [_drop_empty(_strip_dart_meta(r)) for r in items] if items else [],
+        }
+
+    raw = await asyncio.gather(
+        *[_fetch(c) for c in corp_codes], return_exceptions=True
+    )
+    results = []
+    for code, item in zip(corp_codes, raw):
+        if isinstance(item, Exception):
+            results.append({"corp_code": code, "error": str(item)})
+        else:
+            results.append(item)
+
+    return _json(results)
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  FISIS 도구
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

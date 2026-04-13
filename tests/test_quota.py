@@ -31,12 +31,13 @@ def test_tracker_increment(tmp_path: Path):
 def test_tracker_persists_to_disk(tmp_path: Path):
     quota_file = tmp_path / "quota.json"
     t1 = QuotaTracker(quota_file=quota_file)
-    t1.increment()
-    t1.increment()
+    # I/O 버퍼링: 10회째 increment에서 디스크에 저장됨
+    for _ in range(10):
+        t1.increment()
 
-    # 새 인스턴스가 동일 파일에서 로드
+    # 새 인스턴스가 동�� 파일에서 로드
     t2 = QuotaTracker(quota_file=quota_file)
-    assert t2.today_count() == 2
+    assert t2.today_count() == 10
 
 
 def test_tracker_near_limit(tmp_path: Path):
@@ -191,11 +192,20 @@ async def test_transport_error_does_not_increment(dart_client_with_temp_quota):
 # ── MCP 도구 테스트 ────────────────────────────────────────────
 
 
+def _make_mock_client_with_cache():
+    """캐시 stats()를 지원하는 mock 클라이언트 생성."""
+    from financial_data_mcp._cache import TTLCache
+
+    mock_client = MagicMock()
+    mock_client._response_cache = TTLCache(ttl_seconds=60)
+    return mock_client
+
+
 async def test_dart_quota_status_tool_returns_json():
     """dart_quota_status 도구가 JSON 응답을 반환하는지."""
     from financial_data_mcp import server
 
-    mock_client = MagicMock()
+    mock_dart = _make_mock_client_with_cache()
     mock_tracker = MagicMock()
     mock_tracker.status.return_value = {
         "today": "2025-04-10",
@@ -206,21 +216,27 @@ async def test_dart_quota_status_tool_returns_json():
         "near_limit": False,
         "history_last_7_days": {"2025-04-10": 150},
     }
-    mock_client.quota = mock_tracker
+    mock_dart.quota = mock_tracker
 
-    with patch.object(server, "_dart", return_value=mock_client):
+    mock_fisis = _make_mock_client_with_cache()
+
+    with (
+        patch.object(server, "_dart", return_value=mock_dart),
+        patch.object(server, "_fisis", return_value=mock_fisis),
+    ):
         result = await server.dart_quota_status()
 
     data = json.loads(result)
     assert data["today_count"] == 150
     assert data["remaining"] == 19850
     assert "warning" not in data  # near_limit=False이므로
+    assert "cache" in data  # 캐시 통계 포함
 
 
 async def test_dart_quota_status_includes_warning_when_near_limit():
     from financial_data_mcp import server
 
-    mock_client = MagicMock()
+    mock_dart = _make_mock_client_with_cache()
     mock_tracker = MagicMock()
     mock_tracker.status.return_value = {
         "today": "2025-04-10",
@@ -231,11 +247,53 @@ async def test_dart_quota_status_includes_warning_when_near_limit():
         "near_limit": True,
         "history_last_7_days": {"2025-04-10": 18500},
     }
-    mock_client.quota = mock_tracker
+    mock_dart.quota = mock_tracker
 
-    with patch.object(server, "_dart", return_value=mock_client):
+    mock_fisis = _make_mock_client_with_cache()
+
+    with (
+        patch.object(server, "_dart", return_value=mock_dart),
+        patch.object(server, "_fisis", return_value=mock_fisis),
+    ):
         result = await server.dart_quota_status()
 
     data = json.loads(result)
     assert "warning" in data
     assert "92.5%" in data["warning"]
+
+
+async def test_dart_quota_status_includes_cache_stats():
+    """dart_quota_status 응답에 캐시 hit/miss 통계가 포함되는지."""
+    from financial_data_mcp import server
+
+    mock_dart = _make_mock_client_with_cache()
+    # 캐시 hit/miss 시뮬레이션
+    mock_dart._response_cache.set("k", "v")
+    mock_dart._response_cache.get("k")        # hit
+    mock_dart._response_cache.get("missing")   # miss
+
+    mock_tracker = MagicMock()
+    mock_tracker.status.return_value = {
+        "today": "2025-04-10",
+        "today_count": 10,
+        "daily_limit": 20000,
+        "remaining": 19990,
+        "usage_pct": 0.05,
+        "near_limit": False,
+        "history_last_7_days": {"2025-04-10": 10},
+    }
+    mock_dart.quota = mock_tracker
+
+    mock_fisis = _make_mock_client_with_cache()
+
+    with (
+        patch.object(server, "_dart", return_value=mock_dart),
+        patch.object(server, "_fisis", return_value=mock_fisis),
+    ):
+        result = await server.dart_quota_status()
+
+    data = json.loads(result)
+    dart_cache = data["cache"]["dart_response"]
+    assert dart_cache["hits"] == 1
+    assert dart_cache["misses"] == 1
+    assert dart_cache["hit_rate_pct"] == 50.0

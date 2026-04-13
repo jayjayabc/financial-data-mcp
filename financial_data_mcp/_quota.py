@@ -101,12 +101,11 @@ class QuotaTracker:
         today = _today()
         self._data[today] = self._data.get(today, 0) + 1
         self._dirty_count += 1
-        # 10회마다 또는 한도 근접 시에만 디스크에 저장
+        # 10회마다 또는 한도 근접 시에만 디스크에 저장 (I/O 버퍼링)
         if self._dirty_count >= 10 or self.is_near_limit():
             self._data = _prune(self._data)
             self._save()
             self._dirty_count = 0
-        self._save()
         return self._data[today]
 
     def today_count(self) -> int:

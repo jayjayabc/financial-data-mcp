@@ -74,6 +74,11 @@ class DartClient:
             base_url=BASE_URL,
             timeout=httpx.Timeout(30.0, connect=10.0),
             headers={"User-Agent": "financial-data-mcp/0.1"},
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+                keepalive_expiry=30.0,
+            ),
         )
         self._response_cache = TTLCache(
             ttl_seconds=RESPONSE_TTL_SECONDS, max_size=256
@@ -204,12 +209,29 @@ class DartClient:
 
         # 캐시 크기 제한 (검색어 다양성 방어)
         if len(self._search_cache) >= SEARCH_CACHE_MAX:
-            # 가장 오래된(삽입 순) 절반 제거 (OrderedDict 아니지만 dict는 insertion-ordered)
             keys_to_remove = list(self._search_cache.keys())[: SEARCH_CACHE_MAX // 2]
             for k in keys_to_remove:
                 self._search_cache.pop(k, None)
         self._search_cache[cache_key] = results
         return results
+
+    async def list_listed_companies(
+        self,
+        corp_cls: str = "",
+    ) -> list[dict]:
+        """상장기업 목록 반환. API 호출 없음 (기업코드 캐시에서 필터).
+
+        Args:
+            corp_cls: 시장 필터 — Y(유가증권), K(코스닥), 빈 문자열(전체)
+        """
+        corps = await self.load_corp_codes()
+        listed = [c for c in corps if c["stock_code"]]
+        if corp_cls:
+            # stock_code의 시장 구분은 corp_codes에 없으므로
+            # corp_cls 필터는 caller에서 처리 (서버 도구에서 company_overview 등 활용)
+            pass
+        listed.sort(key=lambda c: c["corp_name"])
+        return listed
 
     # ── 기업개황 ───────────────────────────────────────────────
 
@@ -281,6 +303,32 @@ class DartClient:
             },
             use_cache=True,
         )
+
+    # ── 사업보고서 주요정보 (범용) ────────────────────────────────
+
+    async def get_business_report(
+        self,
+        endpoint: str,
+        corp_code: str,
+        bsns_year: str,
+        reprt_code: str = "11011",
+    ) -> dict:
+        """사업보고서 주요정보 범용 조회.
+
+        배당, 임원, 직원, 주주, 자기주식 등 대부분의 사업보고서 항목이
+        동일한 파라미터(corp_code, bsns_year, reprt_code)를 사용합니다.
+        """
+        return await self._get(
+            endpoint,
+            {
+                "corp_code": corp_code,
+                "bsns_year": bsns_year,
+                "reprt_code": reprt_code,
+            },
+            use_cache=True,
+        )
+
+    # ── 다중 기업 비교 ────────────────────────────────────────────
 
     async def get_multi_company_financials(
         self,

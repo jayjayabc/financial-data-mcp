@@ -324,11 +324,12 @@ async def test_invalid_report_code_returns_friendly_error():
 
 
 @pytest.mark.asyncio
-async def test_multi_company_over_20_returns_friendly_error():
+async def test_multi_company_over_100_returns_friendly_error():
+    """100개 초과 기업코드는 에러 (자동 청킹 한계)."""
     mock_client = MagicMock()
     mock_client.get_multi_company_financials = AsyncMock()
 
-    codes = [f"{i:08d}" for i in range(25)]
+    codes = [f"{i:08d}" for i in range(105)]
 
     with patch.object(server, "_dart", return_value=mock_client):
         result = await server.dart_multi_company_financials(
@@ -336,7 +337,7 @@ async def test_multi_company_over_20_returns_friendly_error():
         )
 
     assert result.startswith("[input error]")
-    assert "최대 20개" in result
+    assert "최대 100개" in result
     mock_client.get_multi_company_financials.assert_not_called()
 
 
@@ -683,3 +684,210 @@ async def test_dart_multi_year_parallel_execution():
 
     # 5개 연도 = 5번 호출
     assert mock_client.get_financial_statements.call_count == 5
+
+
+# ── dart_search_companies (복수 기업명 병렬 검색) ────────────
+
+
+@pytest.mark.asyncio
+async def test_search_companies_returns_grouped():
+    """여러 회사명을 병렬 검색하고 그룹핑된 결과를 반환하는지."""
+    mock_client = MagicMock()
+    mock_client.search_company = AsyncMock(
+        side_effect=lambda name, limit: [
+            {"corp_code": "001", "corp_name": name, "stock_code": "005930"}
+        ]
+    )
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        server._plan_called = True
+        result = await server.dart_search_companies(
+            names=["KB금융", "신한지주", "하나금융지주"]
+        )
+
+    data = json.loads(result)
+    assert len(data) == 3
+    assert data[0]["query"] == "KB금융"
+    assert data[1]["query"] == "신한지주"
+    assert data[2]["query"] == "하나금융지주"
+    assert data[0]["results"][0]["corp_name"] == "KB금융"
+    # 3번 병렬 호출
+    assert mock_client.search_company.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_search_companies_validates_empty():
+    result = await server.dart_search_companies(names=[])
+    assert result.startswith("[input error]")
+
+
+@pytest.mark.asyncio
+async def test_search_companies_validates_max_count():
+    result = await server.dart_search_companies(
+        names=[f"회사{i}" for i in range(25)]
+    )
+    assert result.startswith("[input error]")
+    assert "최대 20개" in result
+
+
+@pytest.mark.asyncio
+async def test_search_companies_empty_name_in_list():
+    result = await server.dart_search_companies(names=["KB금융", "  ", "신한"])
+    assert result.startswith("[input error]")
+
+
+@pytest.mark.asyncio
+async def test_search_companies_no_results():
+    """검색 결과가 없는 회사명도 빈 리스트로 정상 반환."""
+    mock_client = MagicMock()
+    mock_client.search_company = AsyncMock(return_value=[])
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        server._plan_called = True
+        result = await server.dart_search_companies(names=["없는회사"])
+
+    data = json.loads(result)
+    assert data[0]["query"] == "없는회사"
+    assert data[0]["results"] == []
+
+
+# ── dart_multi_company_financials 자동 청킹 ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_multi_company_auto_chunks_over_20():
+    """20개 초과 기업코드가 자동으로 20개씩 분할되어 병렬 호출되는지."""
+    codes = [f"{i:08d}" for i in range(25)]
+
+    mock_client = MagicMock()
+    mock_client.get_multi_company_financials = AsyncMock(
+        return_value={"list": [
+            {"sj_div": "BS", "account_nm": "자산총계", "thstrm_amount": "100"}
+        ]}
+    )
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        server._plan_called = True
+        result = await server.dart_multi_company_financials(
+            corp_codes=codes, bsns_year="2023"
+        )
+
+    # 25개 → 20 + 5 = 2번 호출
+    assert mock_client.get_multi_company_financials.call_count == 2
+    data = json.loads(result)
+    assert len(data) == 2  # 각 청크에서 1행씩
+
+
+@pytest.mark.asyncio
+async def test_multi_company_single_chunk_under_20():
+    """20개 이하는 단일 호출."""
+    codes = [f"{i:08d}" for i in range(5)]
+
+    mock_client = MagicMock()
+    mock_client.get_multi_company_financials = AsyncMock(
+        return_value={"list": [
+            {"sj_div": "BS", "account_nm": "자산총계", "thstrm_amount": "100"}
+        ]}
+    )
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        server._plan_called = True
+        result = await server.dart_multi_company_financials(
+            corp_codes=codes, bsns_year="2023"
+        )
+
+    assert mock_client.get_multi_company_financials.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_multi_company_max_100_validation():
+    """100개 초과 시 에러."""
+    codes = [f"{i:08d}" for i in range(105)]
+    result = await server.dart_multi_company_financials(
+        corp_codes=codes, bsns_year="2023"
+    )
+    assert result.startswith("[input error]")
+    assert "최대 100개" in result
+
+
+# ── dart_to_fisis_bridge ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_bridge_identifies_bank():
+    """은행 업종코드(6411)를 가진 기업이 FISIS A(은행)로 매핑되는지."""
+    mock_client = MagicMock()
+    mock_client.get_company_overview = AsyncMock(return_value={
+        "status": "000",
+        "corp_name": "KB금융지주",
+        "induty_code": "6411",
+        "corp_cls": "Y",
+    })
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_to_fisis_bridge(corp_code="00315953")
+
+    data = json.loads(result)
+    assert data["is_financial"] is True
+    assert data["fisis_lrg_div"] == "A"
+    assert "은행" in data["fisis_sector"]
+
+
+@pytest.mark.asyncio
+async def test_bridge_identifies_securities():
+    """증권사 업종코드(6611)가 FISIS D(금융투자)로 매핑되는지."""
+    mock_client = MagicMock()
+    mock_client.get_company_overview = AsyncMock(return_value={
+        "corp_name": "미래에셋증권",
+        "induty_code": "6611",
+        "corp_cls": "Y",
+    })
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_to_fisis_bridge(corp_code="00111111")
+
+    data = json.loads(result)
+    assert data["is_financial"] is True
+    assert data["fisis_lrg_div"] == "D"
+
+
+@pytest.mark.asyncio
+async def test_bridge_non_financial():
+    """비금융 기업(제조업)이 is_financial=False로 반환되는지."""
+    mock_client = MagicMock()
+    mock_client.get_company_overview = AsyncMock(return_value={
+        "corp_name": "삼성전자",
+        "induty_code": "2610",
+        "corp_cls": "Y",
+    })
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_to_fisis_bridge(corp_code="00126380")
+
+    data = json.loads(result)
+    assert data["is_financial"] is False
+    assert "금융기관으로 분류되지 않았습니다" in data["note"]
+
+
+@pytest.mark.asyncio
+async def test_bridge_fallback_to_name_match():
+    """업종코드 매칭 실패 시 회사명 키워드로 fallback 매핑."""
+    mock_client = MagicMock()
+    mock_client.get_company_overview = AsyncMock(return_value={
+        "corp_name": "신한카드",
+        "induty_code": "9999",  # 매핑 안 되는 코드
+        "corp_cls": "E",
+    })
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_to_fisis_bridge(corp_code="00222222")
+
+    data = json.loads(result)
+    assert data["is_financial"] is True
+    assert data["matched_by"] == "카드"
+
+
+@pytest.mark.asyncio
+async def test_bridge_invalid_corp_code():
+    result = await server.dart_to_fisis_bridge(corp_code="invalid")
+    assert result.startswith("[input error]")

@@ -962,31 +962,51 @@ async def dart_list_listed_companies() -> str:
 
 @mcp.tool()
 @_tool_safe
-async def dart_screen_dividend(
+async def dart_screen_report(
     corp_codes: list[str],
     bsns_year: str,
+    report_type: str,
     reprt_code: str = "11011",
 ) -> str:
-    """여러 기업의 배당 정보를 한번에 병렬 조회하여 스크리닝합니다.
+    """여러 기업의 사업보고서 주요정보를 한번에 병렬 조회하여 스크리닝합니다.
 
-    고배당주 탐색, 배당성향 비교 등에 활용.
-    최대 50개 기업까지 지원하며, asyncio.gather로 병렬 실행됩니다.
-    부분 실패 시 실패한 기업만 error 표시, 나머지는 정상 반환.
+    report_type으로 22종 중 원하는 항목을 지정. dart_business_report와 동일한
+    report_type을 사용하되, 여러 기업에 대해 병렬 실행합니다.
+
+    활용 예시:
+    - "배당성향 50% 이상 기업" → report_type="dividend"
+    - "직원 평균연봉 1억 이상 기업" → report_type="employee"
+    - "최대주주 지분율 변동 기업" → report_type="shareholder_change"
+    - "감사의견 비적정 기업" → report_type="audit_opinion"
+    - "자기주식 취득 기업" → report_type="treasury_stock"
+    - "임원 개인보수 5억 이상" → report_type="individual_pay"
+    - "최근 증자/감자 기업" → report_type="capital_change"
+
+    최대 50개 기업까지, 부분 실패 시 성공 데이터는 보존.
 
     Args:
         corp_codes: 기업코드 리스트 (1~50개)
         bsns_year: 사업연도 (YYYY)
+        report_type: 조회 항목 (dart_business_report과 동일한 22종)
         reprt_code: 보고서코드 (11011=사업보고서)
     """
     v.validate_corp_codes_list(corp_codes, max_count=50)
     v.validate_year(bsns_year)
     v.validate_report_code(reprt_code)
 
+    if report_type not in BUSINESS_REPORT_TYPES:
+        valid_types = ", ".join(sorted(BUSINESS_REPORT_TYPES.keys()))
+        raise ValueError(
+            f"report_type '{report_type}'은(는) 지원되지 않습니다. "
+            f"사용 가능: {valid_types}"
+        )
+
+    endpoint, description = BUSINESS_REPORT_TYPES[report_type]
     client = _dart()
 
     async def _fetch(code: str) -> dict:
         data = await client.get_business_report(
-            "alotMatter.json", code, bsns_year, reprt_code
+            endpoint, code, bsns_year, reprt_code
         )
         items = data.get("list", []) or []
         return {
@@ -1004,7 +1024,7 @@ async def dart_screen_dividend(
         else:
             results.append(item)
 
-    return _json(results)
+    return _json({"report_type": report_type, "description": description, "results": results})
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -770,7 +770,7 @@ async def test_e2e_dividend_multi_year_chain():
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  dart_list_listed_companies + dart_screen_dividend
+#  dart_list_listed_companies + dart_screen_report
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
@@ -806,13 +806,13 @@ async def test_screen_dividend_parallel():
     mock_client.get_business_report = AsyncMock(side_effect=_mock_report)
 
     with patch.object(server, "_dart", return_value=mock_client):
-        result = await server.dart_screen_dividend(
-            corp_codes=["001", "002"].copy(),  # copy to avoid mutation
+        result = await server.dart_screen_report(
+            corp_codes=["001", "002"],
             bsns_year="2023",
+            report_type="dividend",
         )
 
     # validate_corp_codes_list will fail because "001" is not 8 digits
-    # Let's use proper corp codes
     assert result.startswith("[input error]")  # 3자리 코드는 검증 실패
 
 
@@ -827,16 +827,18 @@ async def test_screen_dividend_proper_codes():
     mock_client.get_business_report = AsyncMock(side_effect=_mock_report)
 
     with patch.object(server, "_dart", return_value=mock_client):
-        result = await server.dart_screen_dividend(
+        result = await server.dart_screen_report(
             corp_codes=["00000001", "00000002"],
             bsns_year="2023",
+            report_type="dividend",
         )
 
     data = json.loads(result)
-    assert len(data) == 2
-    assert data[0]["corp_code"] == "00000001"
-    assert data[0]["data"][0]["thstrm"] == "55.0"
-    assert data[1]["data"][0]["thstrm"] == "30.0"
+    assert data["report_type"] == "dividend"
+    assert len(data["results"]) == 2
+    assert data["results"][0]["corp_code"] == "00000001"
+    assert data["results"][0]["data"][0]["thstrm"] == "55.0"
+    assert data["results"][1]["data"][0]["thstrm"] == "30.0"
 
 
 @pytest.mark.asyncio
@@ -851,30 +853,64 @@ async def test_screen_dividend_partial_failure():
     mock_client.get_business_report = AsyncMock(side_effect=_mock_report)
 
     with patch.object(server, "_dart", return_value=mock_client):
-        result = await server.dart_screen_dividend(
+        result = await server.dart_screen_report(
             corp_codes=["00000001", "00000002", "00000003"],
             bsns_year="2023",
+            report_type="dividend",
         )
 
     data = json.loads(result)
-    assert len(data) == 3
+    assert len(data["results"]) == 3
 
-    success = [d for d in data if "data" in d]
-    failed = [d for d in data if "error" in d]
+    success = [d for d in data["results"] if "data" in d]
+    failed = [d for d in data["results"] if "error" in d]
     assert len(success) == 2
     assert len(failed) == 1
     assert failed[0]["corp_code"] == "00000002"
 
 
 @pytest.mark.asyncio
-async def test_screen_dividend_exceeds_50():
+async def test_screen_report_exceeds_50():
     """51개 기업 → [input error]."""
     codes = [f"{i:08d}" for i in range(51)]
-    result = await server.dart_screen_dividend(
-        corp_codes=codes, bsns_year="2023"
+    result = await server.dart_screen_report(
+        corp_codes=codes, bsns_year="2023", report_type="dividend"
     )
     assert result.startswith("[input error]")
     assert "최대 50개" in result
+
+
+@pytest.mark.asyncio
+async def test_screen_report_invalid_report_type():
+    """잘못된 report_type → [input error]."""
+    result = await server.dart_screen_report(
+        corp_codes=["00000001"], bsns_year="2023", report_type="nonexistent"
+    )
+    assert result.startswith("[input error]")
+    assert "nonexistent" in result
+
+
+@pytest.mark.asyncio
+async def test_screen_report_employee():
+    """직원 현황 스크리닝 (배당 외 다른 report_type 검증)."""
+    async def _mock_report(endpoint, corp, year, reprt="11011"):
+        assert "empSttus" in endpoint  # employee 엔드포인트 확인
+        return {"list": [{"fo_bbm": "사무직", "jan_sal_am": "85000000"}]}
+
+    mock_client = MagicMock()
+    mock_client.get_business_report = AsyncMock(side_effect=_mock_report)
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_screen_report(
+            corp_codes=["00000001"],
+            bsns_year="2023",
+            report_type="employee",
+        )
+
+    data = json.loads(result)
+    assert data["report_type"] == "employee"
+    assert "직원" in data["description"]
+    assert data["results"][0]["data"][0]["jan_sal_am"] == "85000000"
 
 
 @pytest.mark.asyncio
@@ -903,18 +939,19 @@ async def test_e2e_full_screening_workflow():
         codes = [c["corp_code"] for c in list_data["list"]]
 
         # Step 2
-        screen_result = await server.dart_screen_dividend(
-            corp_codes=codes, bsns_year="2023"
+        screen_result = await server.dart_screen_report(
+            corp_codes=codes, bsns_year="2023", report_type="dividend"
         )
         screen_data = json.loads(screen_result)
 
     # Step 3: 고배당 필터 (LLM이 수행할 부분을 시뮬레이션)
+    results = screen_data["results"]
     high_dividend = [
-        d for d in screen_data
+        d for d in results
         if "data" in d and d["data"]
         and float(d["data"][0].get("thstrm", "0")) >= 50.0
     ]
 
     assert list_data["total"] == 5
-    assert len(screen_data) == 5
+    assert len(results) == 5
     assert len(high_dividend) == 3  # 00000000, 00000002, 00000004

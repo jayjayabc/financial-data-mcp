@@ -307,120 +307,12 @@ _DATA_CATALOG = {
         ],
         "cost": "1~2 API 호출로 업권 전체 데이터",
         "common_stat_codes": {
-            "note": "fisis_get_statistics의 stat_cd 파라미터 = fisis_list_statistics 결과의 list_no 필드값. 전체 목록은 fisis_list_statistics 호출.",
-            "은행(lrg_div=A)": {
-                "_재무현황": {
-                    "SA003": "요약재무상태표(자산-은행계정)",
-                    "SA004": "요약재무상태표(부채 및 자본-은행계정)",
-                    "SA021": "요약손익계산서(은행계정) — 이자이익·수수료·판관비·당기순이익",
-                    "SA022": "연결재무상태표(자산)",
-                    "SA023": "연결재무상태표(부채 및 자본)",
-                    "SA024": "연결손익계산서 — 연결기준 손익",
-                    "SA029": "부문별 손익(이자부문)",
-                    "SA030": "부문별 손익(수수료부문)",
-                    "SA033": "부문별 손익(판매비와 관리비) — 판관비 세부",
-                    "SA043": "대출금 운용(형태별 대출금)",
-                    "SA044": "유형별 대출채권(업종별 기업대출금)",
-                    "SA045": "유형별 대출채권(용도별 원화대출금)",
-                    "SA028": "형태별 예수금",
-                    "SA027": "영업규모",
-                },
-                "_주요경영지표": {
-                    "SA014": "자본적정성 — BIS비율·Tier1·보통주자본비율",
-                    "SA015": "여신건전성(여신건전성) — 고정이하여신비율",
-                    "SA017": "수익성 — ROA·ROE·NIM",
-                    "SA018": "유동성",
-                    "SA019": "생산성",
-                    "SA025": "대손충당금 및 대손상각현황",
-                    "SA040": "연체율(원화대출금 기준)",
-                    "SA041": "여신건전성(여신종별 고정이하여신)",
-                    "SA042": "여신건전성(대손충당금 적립비율)",
-                },
-                "_보도자료통계": {
-                    "SA048": "국내은행 수익구조 — 순이자이익·비이자이익",
-                    "SA049": "원화자금조달",
-                    "SA050": "원화자금운용",
-                    "SA051": "원화대출 부문별 대출채권",
-                    "SA052": "원화대출 부문별 연체율",
-                    "SA053": "BIS비율 — BIS·Tier1·보통주자본비율 분기별",
-                    "SA054": "부실채권비율(NPL)",
-                },
-            },
-            "비은행_신탁(lrg_div=B)": {
-                "_note": "신탁회사(은행·증권·보험 계열) 신탁계정 통계",
-                "_은행신탁": {
-                    "SB005": "수탁고(은행)",
-                    "SB013": "재무상태표-신탁계정(은행)",
-                    "SB016": "손익계산서-신탁계정(은행)",
-                    "SB010": "특정금전수탁현황(은행, 14.03이후)",
-                    "SB019": "금전신탁 자금조달(은행)",
-                    "SB022": "금전신탁 자금운용(은행)",
-                },
-                "_증권신탁": {
-                    "SB006": "수탁고(증권)",
-                    "SB014": "재무상태표-신탁계정(증권)",
-                    "SB017": "손익계산서-신탁계정(증권)",
-                    "SB011": "특정금전수탁현황(증권, 14.03이후)",
-                },
-            },
-            "여신전문금융사_카드(lrg_div=C)": {
-                "_note": "카드·캐피탈·할부금융·리스사 통계 (FISIS API에서 lrg_div=C)",
-                "_재무현황": {
-                    "SC103": "요약재무상태표(자산)(08.03이후)",
-                    "SC104": "요약재무상태표(부채 및 자본)(08.03이후)",
-                    "SC118": "요약손익계산서(08.03이후)",
-                    "SC218": "요약손익계산서(18.12이후) — 최신 기준",
-                    "SC111": "부문별 손익(이자부문)",
-                    "SC112": "부문별 손익(카드부문)",
-                    "SC113": "부문별 손익(할부금융부문)",
-                    "SC114": "부문별 손익(리스부문)",
-                    "SC116": "부문별 자산현황(판매비와 관리비)",
-                    "SC107": "부문별 자산현황(카드자산)",
-                    "SC108": "부문별 자산현황(할부금융자산)",
-                    "SC109": "부문별 자산현황(리스자산)",
-                },
-                "_주요경영지표": {
-                    "SC007": "자본적정성",
-                    "SC008": "여신건전성",
-                    "SC009": "수익성",
-                    "SC010": "유동성",
-                    "SC117": "여신건전성(연체채권비율)",
-                },
-                "_보도자료통계": {
-                    "SC120": "전업카드사 순이익 추이",
-                    "SC121": "카드수 및 회원수",
-                    "SC122": "카드 이용실적",
-                    "SC123": "카드대출 이용실적",
-                    "SC125": "수익성",
-                    "SC126": "주요재무현황",
-                    "SC127": "조정자기자본비율",
-                },
-                "_카드영업": {
-                    "SC013": "카드 영업활동(신용카드이용실적)",
-                    "SC119": "부문별 영업실적",
-                },
-            },
-            "금융투자(lrg_div=D)": {
-                "_note": "증권사·자산운용사 통계",
-                "_재무현황": {
-                    "SD103": "요약재무상태표(자산)(11.06이후)",
-                    "SD104": "요약재무상태표(부채 및 자본)(11.06이후)",
-                    "SD107": "요약손익계산서(11.06이후) — 증권사·자산운용사",
-                    "SD012": "부문별 손익(수수료)",
-                    "SD013": "부문별 손익(증권평가 및 처분)",
-                    "SD014": "부문별 손익(파생상품)",
-                    "SD015": "부문별 손익(이자)",
-                    "SD017": "부문별 손익(판매비와 관리비)",
-                    "SD018": "자산현황(대출채권)",
-                    "SD021": "자산현황(유가증권)",
-                },
-                "_주요경영지표": {
-                    "SD008": "자본적정성",
-                    "SD009": "여신건전성",
-                    "SD010": "수익성 — ROA·ROE",
-                    "SD011": "유동성",
-                },
-            },
+            "note": "stat_cd = fisis_list_statistics 결과의 list_no 값. 아래는 자주 쓰는 코드만 발췌. 전체 목록 → fisis_list_statistics(lrg_div=코드) 호출.",
+            "은행(A)": {"SA021": "요약손익계산서", "SA003": "요약재무상태표(자산)", "SA014": "자본적정성(BIS)", "SA017": "수익성(ROA·ROE)", "SA053": "BIS비율(분기별)"},
+            "비은행(B)": {"SB005": "수탁고(은행)", "SB013": "재무상태표(은행신탁)", "SB016": "손익계산서(은행신탁)"},
+            "여신전문(C)": {"SC218": "요약손익계산서(최신)", "SC103": "요약재무상태표(자산)", "SC007": "자본적정성", "SC122": "카드이용실적"},
+            "금융투자(D)": {"SD107": "요약손익계산서", "SD103": "요약재무상태표(자산)", "SD008": "자본적정성", "SD010": "수익성(ROA·ROE)"},
+            "_tip": "22개 업권(H=생명보험, I=손해보험, E=저축은행, F=증권 등) 통계코드도 fisis_list_statistics(lrg_div=코드)로 조회 가능.",
         },
     },
     "planning_framework": {
@@ -599,15 +491,12 @@ async def dart_financial_statements(
     bsns_year: str,
     reprt_code: str = "11011",
 ) -> str:
-    """DART에서 단일회사의 주요 재무계정을 조회합니다.
-
-    자산총계, 부채총계, 자본총계, 매출액, 영업이익, 당기순이익 등 핵심 지표를
-    당기/전기/전전기 비교 형태로 반환합니다.
+    """단일회사 주요 재무계정 조회 (당기/전기/전전기 비교).
 
     Args:
         corp_code: 기업코드 (8자리)
-        bsns_year: 사업연도 (YYYY, 예: "2024")
-        reprt_code: 보고서코드 (11011=사업보고서, 11012=반기, 11013=1분기, 11014=3분기)
+        bsns_year: 사업연도 (YYYY)
+        reprt_code: 보고서코드 (기본 11011=사업보고서)
     """
     v.validate_corp_code(corp_code)
     v.validate_year(bsns_year)
@@ -627,20 +516,16 @@ async def dart_full_financial_statements(
     fs_div: str = "CFS",
     sj_div: str = "",
 ) -> str:
-    """DART에서 단일회사의 전체 재무제표를 조회합니다.
+    """단일회사 전체 재무제표 조회. **sj_div로 특정 표만 필터하면 토큰 75% 절감.**
 
-    주요계정보다 상세한 데이터가 필요할 때 사용하세요.
-    **sj_div 파라미터로 특정 재무표만 추출하면 토큰을 1/4~1/5 수준으로 절약할 수 있습니다.**
-
-    연결(CFS) 요청인데 결과가 비면 자동으로 개별(OFS)로 폴백합니다
-    (소규모 기업은 연결재무제표를 작성하지 않는 경우가 있음).
+    CFS 결과가 비면 자동으로 OFS 폴백.
 
     Args:
         corp_code: 기업코드 (8자리)
         bsns_year: 사업연도 (YYYY)
-        reprt_code: 보고서코드 (11011=사업보고서, 11012=반기, 11013=1분기, 11014=3분기)
-        fs_div: 재무제표구분 (CFS=연결, OFS=개별)
-        sj_div: 특정 표만 필터 (BS=재무상태표, IS=손익계산서, CIS=포괄손익, CF=현금흐름, SCE=자본변동, 비워두면 전체)
+        reprt_code: 보고서코드 (기본 11011=사업보고서)
+        fs_div: CFS=연결, OFS=개별
+        sj_div: BS/IS/CIS/CF/SCE (비워두면 전체 — 비권장)
     """
     v.validate_corp_code(corp_code)
     v.validate_year(bsns_year)
@@ -682,15 +567,12 @@ async def dart_multi_company_financials(
     bsns_year: str,
     reprt_code: str = "11011",
 ) -> str:
-    """여러 회사의 주요 재무계정을 한번에 비교 조회합니다.
-
-    경쟁사 비교, 동종업계 분석에 활용. 최대 20개 기업까지 가능.
-    20개 초과 시 에러를 반환하므로 사전에 분할해 호출하세요.
+    """다중회사 주요 재무계정 비교 조회 (최대 20개).
 
     Args:
         corp_codes: 기업코드 리스트 (1~20개)
         bsns_year: 사업연도 (YYYY)
-        reprt_code: 보고서코드 (11011=사업보고서 등)
+        reprt_code: 보고서코드 (기본 11011=사업보고서)
     """
     v.validate_corp_codes_list(corp_codes)
     v.validate_year(bsns_year)
@@ -709,22 +591,15 @@ async def dart_business_report(
     reprt_code: str = "11011",
     info_type: str = "",
 ) -> str:
-    """DART 사업보고서 주요정보를 조회합니다 (28개 항목).
+    """사업보고서 주요정보 28개 항목 조회. info_type 비워두면 항목 목록 반환.
 
-    배당, 임원현황, 직원현황, 최대주주, 자기주식, 감사의견 등
-    사업보고서에 공시된 구조화된 데이터를 조회합니다.
-
-    info_type을 비워두면 사용 가능한 전체 항목 목록을 반환합니다.
-
-    자주 쓰는 info_type:
-    배당, 직원현황, 임원현황, 최대주주, 최대주주변동, 자기주식,
-    타법인출자, 감사인명칭의견, 개인별보수5억이상
+    자주 쓰는 info_type: 배당, 직원현황, 임원현황, 최대주주, 자기주식, 감사인명칭의견
 
     Args:
         corp_code: 기업코드 (8자리)
         bsns_year: 사업연도 (YYYY)
-        reprt_code: 보고서코드 (11011=사업보고서, 11012=반기, 11013=1분기, 11014=3분기)
-        info_type: 조회할 항목 (비워두면 전체 항목 목록 반환)
+        reprt_code: 보고서코드 (기본 11011=사업보고서)
+        info_type: 조회할 항목 (비워두면 목록 반환)
     """
     if not info_type:
         items = [{"type": k, "desc": m["desc"]} for k, m in BUSINESS_REPORT_TYPES.items()]
@@ -743,15 +618,11 @@ async def dart_equity_disclosure(
     corp_code: str,
     report_type: str = "",
 ) -> str:
-    """DART 지분공시 정보를 조회합니다.
-
-    report_type:
-    - 대량보유: 5% 이상 지분 변동 보고
-    - 임원주요주주: 임원·주요주주 소유 보고
+    """지분공시 조회. report_type: 대량보유 / 임원주요주주 (비워두면 목록 반환).
 
     Args:
         corp_code: 기업코드 (8자리)
-        report_type: 대량보유 / 임원주요주주 (비워두면 목록 반환)
+        report_type: 대량보유 / 임원주요주주
     """
     if not report_type:
         items = [{"type": k, "desc": m["desc"]} for k, m in EQUITY_DISCLOSURE_TYPES.items()]
@@ -767,20 +638,13 @@ async def dart_major_event(
     corp_code: str,
     event_type: str = "",
 ) -> str:
-    """DART 주요사항보고서를 조회합니다 (36개 이벤트 유형).
+    """주요사항보고서 36개 이벤트 조회. event_type 비워두면 목록 반환.
 
-    증자, 감자, 합병, 분할, 사채발행, 자기주식, 소송 등
-    기업의 주요 경영 이벤트 공시 데이터를 조회합니다.
-
-    event_type을 비워두면 사용 가능한 전체 이벤트 목록을 반환합니다.
-
-    자주 쓰는 event_type:
-    유상증자결정, 무상증자결정, 감자결정, 합병결정, 분할결정,
-    전환사채발행결정, 자기주식취득결정, 소송제기
+    자주 쓰는: 유상증자결정, 합병결정, 분할결정, 전환사채발행결정, 소송제기
 
     Args:
         corp_code: 기업코드 (8자리)
-        event_type: 이벤트 유형 (비워두면 전체 목록 반환)
+        event_type: 이벤트 유형 (비워두면 목록 반환)
     """
     if not event_type:
         items = [{"type": k, "desc": m["desc"]} for k, m in MAJOR_EVENT_TYPES.items()]
@@ -799,15 +663,13 @@ async def dart_securities_report(
     bgn_de: str = "",
     end_de: str = "",
 ) -> str:
-    """DART 증권신고서 정보를 조회합니다 (6개 유형).
-
-    report_type: 지분증권, 채무증권, 증권예탁증권, 합병, 주식교환이전, 분할
+    """증권신고서 6개 유형 조회. report_type 비워두면 목록 반환.
 
     Args:
         corp_code: 기업코드 (8자리)
-        report_type: 증권신고서 유형 (비워두면 전체 목록 반환)
-        bgn_de: 검색 시작일 (YYYYMMDD, 선택)
-        end_de: 검색 종료일 (YYYYMMDD, 선택)
+        report_type: 지분증권/채무증권/합병/분할 등 (비워두면 목록)
+        bgn_de: 시작일 (YYYYMMDD, 선택)
+        end_de: 종료일 (YYYYMMDD, 선택)
     """
     if not report_type:
         items = [{"type": k, "desc": m["desc"]} for k, m in SECURITIES_REPORT_TYPES.items()]
@@ -824,16 +686,10 @@ async def dart_securities_report(
 async def dart_document(
     rcept_no: str,
 ) -> str:
-    """DART 공시서류 원본을 다운로드하여 텍스트를 추출합니다.
-
-    재무제표 주석(notes), 감사보고서 본문 등 구조화 API로 제공되지 않는
-    공시 원문 데이터에 접근할 때 사용합니다.
-
-    rcept_no는 dart_search_disclosures 결과에서 확인할 수 있습니다.
-    ⚠️ 문서 크기가 클 수 있어 50,000자까지만 반환됩니다.
+    """공시서류 원본 텍스트 추출 (주석/notes 포함). 최대 50,000자.
 
     Args:
-        rcept_no: 접수번호 (14자리, dart_search_disclosures 결과에서 확인)
+        rcept_no: 접수번호 (dart_search_disclosures 결과에서 확인)
     """
     if not rcept_no or not rcept_no.strip():
         raise ValueError("rcept_no는 필수입니다. dart_search_disclosures로 먼저 확인하세요.")
@@ -846,12 +702,10 @@ async def dart_document(
 async def dart_xbrl_taxonomy(
     sj_div: str,
 ) -> str:
-    """XBRL 택사노미(재무제표 표준 계정과목)를 조회합니다.
-
-    DART 재무제표에서 사용되는 표준 계정과목 체계를 확인할 때 사용합니다.
+    """XBRL 표준 계정과목 조회.
 
     Args:
-        sj_div: 재무제표 구분 (BS=재무상태표, IS=손익계산서, CIS=포괄손익, CF=현금흐름, SCE=자본변동)
+        sj_div: BS/IS/CIS/CF/SCE
     """
     v.validate_sj_div(sj_div)
     if not sj_div:
@@ -870,16 +724,10 @@ async def dart_xbrl_taxonomy(
 async def fisis_list_divisions(
     div_cd: str = "",
 ) -> str:
-    """FISIS에서 사용 가능한 전체 업권(22개) 목록을 반환합니다. API 호출 없이 즉시 반환.
-
-    이 코드들을 fisis_list_statistics, fisis_get_statistics, fisis_list_companies의
-    lrg_div 파라미터에 직접 사용하세요.
-
-    특정 업권 내 세부 소분류(sml_div)나 소속 금융회사를 알고 싶으면
-    fisis_list_companies(lrg_div=코드)를 호출하세요.
+    """FISIS 22개 업권 목록 반환 (API 호출 없음). 세부 소분류 → fisis_list_companies 사용.
 
     Args:
-        div_cd: 특정 업권만 조회 (예: A, C, H). 비워두면 전체 22개 업권.
+        div_cd: 특정 업권 (예: A, C, H). 비워두면 전체 22개.
     """
     divisions = _fisis().list_divisions(div_cd)
     return _json({
@@ -896,15 +744,11 @@ async def fisis_list_statistics(
     lrg_div: str = "",
     sml_div: str = "",
 ) -> str:
-    """FISIS에서 조회 가능한 통계목록을 검색합니다.
-
-    어떤 통계가 있는지 확인할 때 사용. 통계코드(stat_cd)를 확인한 후
-    fisis_get_statistics 로 실제 데이터를 조회하세요.
+    """FISIS 통계목록 검색. stat_cd 확인 후 fisis_get_statistics로 데이터 조회.
 
     Args:
-        lrg_div: 업권코드 — 22개 지원 (예: A=국내은행, H=생명보험, C=신용카드, F=증권 등).
-                 전체 목록은 fisis_list_divisions 참조. 비워두면 전체.
-        sml_div: 소분류 (fisis_list_divisions로 사용 가능한 코드 확인, 비워두면 전체)
+        lrg_div: 업권코드 (A/C/H/F 등 22개. fisis_list_divisions 참조)
+        sml_div: 소분류 (선택)
     """
     data = await _fisis().list_statistics(lrg_div, sml_div)
     return _json(_fisis_extract_list(data))
@@ -921,20 +765,16 @@ async def fisis_get_statistics(
     sml_div: str = "",
     term: str = "Q",
 ) -> str:
-    """FISIS에서 금융통계 데이터를 조회합니다.
-
-    stat_cd는 fisis_list_statistics 결과의 list_no 필드값입니다.
-    plan_data_query의 common_stat_codes에 주요 코드가 정리되어 있으니 먼저 확인하세요.
+    """FISIS 금융통계 데이터 조회. stat_cd는 plan_data_query 또는 fisis_list_statistics에서 확인.
 
     Args:
-        stat_cd: 통계코드 (fisis_list_statistics 결과의 list_no 필드값, 예: "SA021")
-        strt_yymm: 조회 시작월 (YYYYMM, 예: "202401")
-        end_yymm: 조회 종료월 (YYYYMM, 예: "202412")
-        finance_cd: 금융회사코드 (비워두면 전체)
-        lrg_div: 업권코드 — 22개 지원 (예: A=국내은행, H=생명보험, C=신용카드 등).
-                 전체 목록은 fisis_list_divisions 참조.
-        sml_div: 소분류 코드 (fisis_list_divisions로 사용 가능한 코드 확인)
-        term: 조회 주기 — Q(분기, 기본값) 또는 Y(연간)
+        stat_cd: 통계코드 (예: "SA021")
+        strt_yymm: 시작월 (YYYYMM)
+        end_yymm: 종료월 (YYYYMM)
+        finance_cd: 금융회사코드 (선택)
+        lrg_div: 업권코드 (선택)
+        sml_div: 소분류 (선택)
+        term: Q=분기(기본), Y=연간
     """
     if not stat_cd:
         raise ValueError("stat_cd는 필수입니다. fisis_list_statistics 로 먼저 확인하세요.")
@@ -960,16 +800,12 @@ async def fisis_list_companies(
     sml_div: str = "",
     finance_cd: str = "",
 ) -> str:
-    """FISIS에 등록된 금융회사 목록을 조회합니다.
-
-    특정 권역의 회사 목록과 finance_cd 를 확인할 때 사용.
-    어떤 업권이 있는지 모르면 fisis_list_divisions를 먼저 호출하세요.
+    """FISIS 금융회사 목록 조회. finance_cd 확인용.
 
     Args:
-        lrg_div: 업권코드 — 17개 지원 (예: A=국내은행, H=생명보험, C=신용카드 등).
-                 전체 목록은 fisis_list_divisions 참조.
-        sml_div: 소분류 (fisis_list_divisions로 사용 가능한 코드 확인)
-        finance_cd: 금융회사코드 (특정 회사만 조회 시)
+        lrg_div: 업권코드 (fisis_list_divisions 참조)
+        sml_div: 소분류 (선택)
+        finance_cd: 특정 회사코드 (선택)
     """
     data = await _fisis().list_companies(lrg_div, sml_div, finance_cd)
     return _json(_fisis_extract_list(data))

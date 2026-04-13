@@ -74,6 +74,11 @@ class DartClient:
             base_url=BASE_URL,
             timeout=httpx.Timeout(30.0, connect=10.0),
             headers={"User-Agent": "financial-data-mcp/0.1"},
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+                keepalive_expiry=30.0,
+            ),
         )
         self._response_cache = TTLCache(
             ttl_seconds=RESPONSE_TTL_SECONDS, max_size=256

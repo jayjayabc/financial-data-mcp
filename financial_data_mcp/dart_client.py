@@ -16,13 +16,12 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import re
 import xml.etree.ElementTree as ET
 import zipfile
-
-import re
+from html.parser import HTMLParser
 
 import httpx
-from bs4 import BeautifulSoup
 
 from ._cache import TTLCache, load_disk_cache, save_disk_cache
 from ._http import mask_params, translate_http_error, with_retry
@@ -61,6 +60,91 @@ SJ_DIV = {
     "CF": "현금흐름표",
     "SCE": "자본변동표",
 }
+
+
+class _DartHTMLParser(HTMLParser):
+    """DART viewer HTML에서 테이블/텍스트를 추출하는 경량 파서.
+
+    외부 의존성 없이 표준 라이브러리만 사용.
+    테이블이 있으면 TSV 형식, 없으면 일반 텍스트 반환.
+    """
+
+    _SKIP_TAGS = frozenset({"script", "style"})
+
+    def __init__(self) -> None:
+        super().__init__()
+        # 테이블 파싱 상태
+        self._tables: list[list[list[str]]] = []  # [table][row][cell]
+        self._in_table = 0        # 중첩 table 깊이
+        self._in_row = False
+        self._in_cell = False
+        self._cell_text: list[str] = []
+        self._current_row: list[str] = []
+        self._current_table: list[list[str]] = []
+        # script/style 건너뛰기
+        self._skip_depth = 0
+        # 테이블 외 텍스트
+        self._text_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag in self._SKIP_TAGS:
+            self._skip_depth += 1
+            return
+        if self._skip_depth:
+            return
+        if tag == "table":
+            self._in_table += 1
+            if self._in_table == 1:
+                self._current_table = []
+        elif tag == "tr" and self._in_table:
+            self._in_row = True
+            self._current_row = []
+        elif tag in ("td", "th") and self._in_row:
+            self._in_cell = True
+            self._cell_text = []
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in self._SKIP_TAGS:
+            self._skip_depth = max(0, self._skip_depth - 1)
+            return
+        if self._skip_depth:
+            return
+        if tag in ("td", "th") and self._in_cell:
+            self._current_row.append(" ".join(self._cell_text).strip())
+            self._in_cell = False
+        elif tag == "tr" and self._in_row:
+            if any(self._current_row):
+                self._current_table.append(self._current_row)
+            self._in_row = False
+        elif tag == "table" and self._in_table:
+            if self._in_table == 1 and self._current_table:
+                self._tables.append(self._current_table)
+                self._current_table = []
+            self._in_table = max(0, self._in_table - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth:
+            return
+        text = data.strip()
+        if not text:
+            return
+        if self._in_cell:
+            self._cell_text.append(text)
+        elif not self._in_table:
+            self._text_parts.append(text)
+
+    def result(self) -> str:
+        if self._tables:
+            parts: list[str] = []
+            for table in self._tables:
+                tsv = "\n".join("\t".join(cells) for cells in table)
+                parts.append(tsv)
+            return "\n\n".join(parts)
+        if self._text_parts:
+            return "\n".join(self._text_parts)
+        return "(내용 없음)"
 
 
 class DartClient:
@@ -401,37 +485,10 @@ class DartClient:
 
     @staticmethod
     def _parse_viewer_html(html: str) -> str:
-        """DART viewer HTML에서 재무 테이블과 텍스트를 추출."""
-        soup = BeautifulSoup(html, "html.parser")
+        """DART viewer HTML에서 재무 테이블과 텍스트를 추출.
 
-        # 스크립트/스타일 태그 제거
-        for tag in soup.find_all(["script", "style"]):
-            tag.decompose()
-
-        parts: list[str] = []
-
-        # 테이블 추출 (재무제표의 핵심)
-        tables = soup.find_all("table")
-        if tables:
-            for table in tables:
-                rows: list[list[str]] = []
-                for tr in table.find_all("tr"):
-                    cells = []
-                    for td in tr.find_all(["td", "th"]):
-                        text = td.get_text(strip=True)
-                        # colspan/rowspan 으로 인한 빈 셀도 포함
-                        cells.append(text)
-                    if any(cells):  # 완전히 빈 행 제외
-                        rows.append(cells)
-                if rows:
-                    # TSV 형식으로 변환 (토큰 효율적)
-                    table_text = "\n".join("\t".join(cells) for cells in rows)
-                    parts.append(table_text)
-        else:
-            # 테이블이 없으면 전체 텍스트 추출
-            text = soup.get_text(separator="\n", strip=True)
-            # 연속 빈줄 제거
-            lines = [line for line in text.splitlines() if line.strip()]
-            parts.append("\n".join(lines))
-
-        return "\n\n".join(parts) if parts else "(내용 없음)"
+        표준 라이브러리 html.parser 사용 (외부 의존성 없음).
+        """
+        parser = _DartHTMLParser()
+        parser.feed(html)
+        return parser.result()

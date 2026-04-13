@@ -603,3 +603,167 @@ async def test_bridge_empty_induty_code():
 
     data = json.loads(result)
     assert data["is_financial"] is False
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  dart_business_report (사업보고서 주요정보 22종)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+@pytest.mark.asyncio
+async def test_business_report_dividend():
+    """배당 정보(dividend) 조회가 정상 동작하는지."""
+    mock_client = MagicMock()
+    mock_client.get_business_report = AsyncMock(return_value={
+        "status": "000",
+        "message": "정상",
+        "list": [
+            {"se": "주당 현금배당금(원)", "thstrm": "2000", "frmtrm": "1800", "lwfr": "1500"},
+            {"se": "현금배당성향(%)", "thstrm": "25.5", "frmtrm": "23.1", "lwfr": "20.0"},
+        ],
+    })
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_business_report(
+            corp_code="00126380", bsns_year="2023", report_type="dividend"
+        )
+
+    data = json.loads(result)
+    assert data["report_type"] == "dividend"
+    assert "배당" in data["description"]
+    assert len(data["list"]) == 2
+    # status/message 메타 필드가 각 행에서 제거됨
+    assert "status" not in data["list"][0]
+    assert data["list"][0]["se"] == "주당 현금배당금(원)"
+
+
+@pytest.mark.asyncio
+async def test_business_report_employee():
+    """직원 현황(employee) 조회."""
+    mock_client = MagicMock()
+    mock_client.get_business_report = AsyncMock(return_value={
+        "status": "000",
+        "list": [
+            {"fo_bbm": "사무직", "sm": "남", "jan_sal_am": "85,000,000", "tot_rgnf_cnt": "5000"},
+        ],
+    })
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_business_report(
+            corp_code="00126380", bsns_year="2023", report_type="employee"
+        )
+
+    data = json.loads(result)
+    assert data["report_type"] == "employee"
+    assert "직원" in data["description"]
+    assert len(data["list"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_business_report_major_shareholder():
+    """최대주주(major_shareholder) 조회."""
+    mock_client = MagicMock()
+    mock_client.get_business_report = AsyncMock(return_value={
+        "list": [
+            {"nm": "국민연금공단", "relate": "최대주주", "bsis_posesn_stock_co": "50000000",
+             "bsis_posesn_stock_qota_rt": "8.50"},
+        ],
+    })
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_business_report(
+            corp_code="00126380", bsns_year="2023", report_type="major_shareholder"
+        )
+
+    data = json.loads(result)
+    assert data["report_type"] == "major_shareholder"
+    assert data["list"][0]["nm"] == "국민연금공단"
+
+
+@pytest.mark.asyncio
+async def test_business_report_invalid_type():
+    """존재하지 않는 report_type → [input error]."""
+    result = await server.dart_business_report(
+        corp_code="00126380", bsns_year="2023", report_type="nonexistent"
+    )
+    assert result.startswith("[input error]")
+    assert "nonexistent" in result
+    assert "dividend" in result  # 사용 가능한 타입 안내
+
+
+@pytest.mark.asyncio
+async def test_business_report_invalid_corp_code():
+    """잘못된 corp_code → API 호출 없이 [input error]."""
+    result = await server.dart_business_report(
+        corp_code="invalid", bsns_year="2023", report_type="dividend"
+    )
+    assert result.startswith("[input error]")
+
+
+@pytest.mark.asyncio
+async def test_business_report_empty_result():
+    """데이터 없음(빈 list) → 안내 메시지 포함 정상 응답."""
+    mock_client = MagicMock()
+    mock_client.get_business_report = AsyncMock(return_value={
+        "status": "013", "message": "조회된 데이터가 없습니다", "list": []
+    })
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_business_report(
+            corp_code="00000001", bsns_year="2023", report_type="dividend"
+        )
+
+    data = json.loads(result)
+    assert data["list"] == []
+    assert "데이터가 없습니다" in data["note"]
+
+
+@pytest.mark.asyncio
+async def test_business_report_all_types_have_valid_endpoints():
+    """레지스트리의 모든 report_type이 유효한 엔드포인트를 가리키는지."""
+    for rtype, (endpoint, desc) in server.BUSINESS_REPORT_TYPES.items():
+        assert endpoint.endswith(".json"), f"{rtype}: endpoint must end with .json"
+        assert desc, f"{rtype}: description must not be empty"
+        assert isinstance(rtype, str) and rtype.isidentifier(), f"{rtype}: must be a valid identifier"
+
+
+@pytest.mark.asyncio
+async def test_e2e_dividend_multi_year_chain():
+    """회사 검색 → 3년 연속 배당 조회 E2E 체인."""
+    mock_client = MagicMock()
+    mock_client.search_company = AsyncMock(return_value=[
+        {"corp_code": "00126380", "corp_name": "삼성전자", "stock_code": "005930"},
+    ])
+
+    dividends_by_year = {
+        "2021": [{"se": "현금배당성향(%)", "thstrm": "55.0"}],
+        "2022": [{"se": "현금배당성향(%)", "thstrm": "52.0"}],
+        "2023": [{"se": "현금배당성향(%)", "thstrm": "60.0"}],
+    }
+
+    async def _mock_report(endpoint, corp, year, reprt="11011"):
+        return {"list": dividends_by_year.get(year, [])}
+
+    mock_client.get_business_report = AsyncMock(side_effect=_mock_report)
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        server._plan_called = True
+
+        # Step 1: 검색
+        search_result = await server.dart_search_company(name="삼성전자")
+        corp_code = json.loads(search_result)[0]["corp_code"]
+
+        # Step 2: 3년 배당 조회
+        results = []
+        for year in ["2021", "2022", "2023"]:
+            r = await server.dart_business_report(
+                corp_code=corp_code, bsns_year=year, report_type="dividend"
+            )
+            results.append(json.loads(r))
+
+    assert corp_code == "00126380"
+    assert len(results) == 3
+    assert results[0]["list"][0]["thstrm"] == "55.0"
+    assert results[2]["list"][0]["thstrm"] == "60.0"
+    # 모든 연도 배당성향 > 50%
+    assert all(float(r["list"][0]["thstrm"]) > 50.0 for r in results)

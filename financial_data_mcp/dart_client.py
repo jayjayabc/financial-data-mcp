@@ -287,6 +287,32 @@ class DartClient:
             use_cache=True,
         )
 
+    # ── 사업보고서 주요정보 (범용) ────────────────────────────────
+
+    async def get_business_report(
+        self,
+        endpoint: str,
+        corp_code: str,
+        bsns_year: str,
+        reprt_code: str = "11011",
+    ) -> dict:
+        """사업보고서 주요정보 범용 조회.
+
+        배당, 임원, 직원, 주주, 자기주식 등 대부분의 사업보고서 항목이
+        동일한 파라미터(corp_code, bsns_year, reprt_code)를 사용합니다.
+        """
+        return await self._get(
+            endpoint,
+            {
+                "corp_code": corp_code,
+                "bsns_year": bsns_year,
+                "reprt_code": reprt_code,
+            },
+            use_cache=True,
+        )
+
+    # ── 다중 기업 비교 ────────────────────────────────────────────
+
     async def get_multi_company_financials(
         self,
         corp_codes: list[str],

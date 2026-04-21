@@ -154,6 +154,8 @@ class FisisClient:
     ) -> dict:
         """FISIS 통계 데이터 조회.
 
+        응답 크기 초과 시 연도별 자동 분할 조회를 시도합니다 (SC218 등 대용량 코드 대응).
+
         Args:
             stat_cd: 통계 코드 (list_no 필드값, 예: SA053)
             strt_yymm: 시작 연월 YYYYMM (예: 202312)
@@ -175,7 +177,39 @@ class FisisClient:
             params["lrgDiv"] = lrg_div
         if sml_div:
             params["smlDiv"] = sml_div
-        return await self._get("statisticsInfoSearch.json", params)
+
+        try:
+            return await self._get("statisticsInfoSearch.json", params)
+        except RuntimeError as e:
+            if "크기 초과" not in str(e):
+                raise
+            # 응답 크기 초과 시 연도별 분할 조회 재시도
+            start_year = int(strt_yymm[:4])
+            end_year = int(end_yymm[:4])
+            if start_year >= end_year:
+                raise RuntimeError(
+                    f"{stat_cd} 응답 크기 초과 — 단일 연도 범위인데도 실패. "
+                    "기관(finance_cd)을 지정하거나 조회 기간을 더 줄이세요."
+                ) from e
+            logger.info("%s 응답 크기 초과, 연도별 분할 조회 시작: %d~%d", stat_cd, start_year, end_year)
+            all_items: list = []
+            for year in range(start_year, end_year + 1):
+                year_params = {**params, "startBaseMm": f"{year}01", "endBaseMm": f"{year}12"}
+                try:
+                    data = await self._get("statisticsInfoSearch.json", year_params)
+                    raw = data.get("result", data)
+                    items = raw.get("list") or raw.get("data") or []
+                    if isinstance(items, list):
+                        all_items.extend(items)
+                except RuntimeError:
+                    logger.warning("%s 연도별 분할 조회 실패: %d년 건너뜀", stat_cd, year)
+            if not all_items:
+                raise RuntimeError(
+                    f"{stat_cd} 연도별 분할 조회 모두 실패. "
+                    "기관(finance_cd)을 지정하거나 범위를 1년으로 줄이세요."
+                ) from e
+            logger.info("%s 분할 조회 완료: %d건 수집", stat_cd, len(all_items))
+            return {"result": {"list": all_items, "_split_query": f"{start_year}~{end_year} 연도별 분할 조회"}}
 
     async def list_companies(
         self,

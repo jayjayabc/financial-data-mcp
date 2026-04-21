@@ -296,3 +296,99 @@ async def test_multi_company_passes_all_codes(dart_client: DartClient):
     call = mock_get.call_args
     params = call.kwargs["params"]
     assert params["corp_code"] == ",".join(corp_codes)
+
+
+# ── get_document_text ──────────────────────────────────────────
+
+
+def _make_document_zip(files: dict[str, str]) -> bytes:
+    """파일명→내용 딕셔너리로 ZIP 바이너리 생성."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, content in files.items():
+            zf.writestr(name, content.encode("utf-8"))
+    return buf.getvalue()
+
+
+async def test_get_document_text_basic(dart_client: DartClient):
+    """HTML 파일에서 텍스트를 추출한다."""
+    html = "<html><body><p>삼성전자 사업보고서</p><p>매출액 300조</p></body></html>"
+    zip_bytes = _make_document_zip({"0001.htm": html})
+    resp = _make_bytes_response(zip_bytes)
+    resp.headers = {"content-type": "application/zip"}
+
+    with patch.object(dart_client._client, "get", AsyncMock(return_value=resp)):
+        result = await dart_client.get_document_text("20240401000001")
+
+    assert "삼성전자 사업보고서" in result["text"]
+    assert "매출액 300조" in result["text"]
+    assert result["rcept_no"] == "20240401000001"
+    assert result["total_chars"] > 0
+
+
+async def test_get_document_text_section_keyword(dart_client: DartClient):
+    """section_keyword 지정 시 해당 키워드 주변 텍스트를 반환한다."""
+    html = (
+        "<html><body>"
+        "<p>재무제표 본문 내용입니다.</p>" * 50
+        + "<p>주석 1. 회사의 개요</p><p>당사는 반도체 제조업을 영위합니다.</p>"
+        + "<p>기타 내용</p>" * 50
+        + "</body></html>"
+    )
+    zip_bytes = _make_document_zip({"0001.htm": html})
+    resp = _make_bytes_response(zip_bytes)
+    resp.headers = {"content-type": "application/zip"}
+
+    with patch.object(dart_client._client, "get", AsyncMock(return_value=resp)):
+        result = await dart_client.get_document_text(
+            "20240401000001", section_keyword="주석", max_chars=500
+        )
+
+    assert "주석" in result["text"]
+    assert result["section_keyword"] == "주석"
+
+
+async def test_get_document_text_max_chars(dart_client: DartClient):
+    """max_chars 초과 시 truncated=True를 반환한다."""
+    long_text = "가나다라마바사" * 1000
+    html = f"<html><body><p>{long_text}</p></body></html>"
+    zip_bytes = _make_document_zip({"0001.htm": html})
+    resp = _make_bytes_response(zip_bytes)
+    resp.headers = {"content-type": "application/zip"}
+
+    with patch.object(dart_client._client, "get", AsyncMock(return_value=resp)):
+        result = await dart_client.get_document_text("20240401000001", max_chars=100)
+
+    assert result["truncated"] is True
+    assert len(result["text"]) <= 100
+
+
+async def test_get_document_text_no_html_files(dart_client: DartClient):
+    """ZIP에 HTML 파일이 없으면 error 키를 반환한다."""
+    zip_bytes = _make_document_zip({"data.xbrl": "<xbrl>내용</xbrl>"})
+    resp = _make_bytes_response(zip_bytes)
+    resp.headers = {"content-type": "application/zip"}
+
+    with patch.object(dart_client._client, "get", AsyncMock(return_value=resp)):
+        result = await dart_client.get_document_text("20240401000001")
+
+    assert "error" in result
+    assert "files" in result
+
+
+async def test_get_document_text_script_style_removed(dart_client: DartClient):
+    """script/style 태그 내용은 추출 텍스트에 포함되지 않는다."""
+    html = (
+        "<html><head><style>body{color:red}</style></head>"
+        "<body><script>alert(1)</script><p>본문 내용</p></body></html>"
+    )
+    zip_bytes = _make_document_zip({"0001.htm": html})
+    resp = _make_bytes_response(zip_bytes)
+    resp.headers = {"content-type": "application/zip"}
+
+    with patch.object(dart_client._client, "get", AsyncMock(return_value=resp)):
+        result = await dart_client.get_document_text("20240401000001")
+
+    assert "body{color:red}" not in result["text"]
+    assert "alert(1)" not in result["text"]
+    assert "본문 내용" in result["text"]

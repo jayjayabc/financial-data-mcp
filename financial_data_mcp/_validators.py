@@ -10,6 +10,8 @@ import re
 
 _CORP_CODE_RE = re.compile(r"^\d{8}$")
 _YEAR_RE = re.compile(r"^(19|20)\d{2}$")
+_RCEPT_NO_RE = re.compile(r"^\d{14}$")
+_RCEPT_NO_RE = re.compile(r"^\d{14}$")
 _YYYYMMDD_RE = re.compile(r"^(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])$")
 _YYYYMM_RE = re.compile(r"^(19|20)\d{2}(0[1-9]|1[0-2])$")
 
@@ -78,6 +80,15 @@ def validate_sj_div(value: str) -> None:
         raise ValueError(
             f"sj_div는 BS/IS/CIS/CF/SCE 중 하나이거나 비워야 합니다. "
             f"받은 값: {value!r}"
+        )
+
+
+def validate_rcept_no(value: str, field: str = "rcept_no") -> None:
+    """14자리 숫자 접수번호 확인."""
+    if not _RCEPT_NO_RE.match(value or ""):
+        raise ValueError(
+            f"{field}는 14자리 숫자여야 합니다. 받은 값: {value!r}. "
+            f"dart_search_disclosures 결과의 rcept_no 필드를 사용하세요."
         )
 
 

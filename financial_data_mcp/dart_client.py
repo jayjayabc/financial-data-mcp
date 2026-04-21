@@ -16,8 +16,10 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import re
 import xml.etree.ElementTree as ET
 import zipfile
+from html.parser import HTMLParser
 
 import httpx
 
@@ -57,6 +59,55 @@ SJ_DIV = {
     "CF": "현금흐름표",
     "SCE": "자본변동표",
 }
+
+
+class _HtmlTextExtractor(HTMLParser):
+    """HTML에서 가시적 텍스트만 추출. script/style/head 태그 내용 무시."""
+
+    _SKIP_TAGS = frozenset({"script", "style", "head"})
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._parts: list[str] = []
+        self._skip_depth: int = 0
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        if tag.lower() in self._SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in self._SKIP_TAGS:
+            self._skip_depth = max(0, self._skip_depth - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth == 0:
+            text = data.strip()
+            if text:
+                self._parts.append(text)
+
+    def get_text(self) -> str:
+        raw = "\n".join(self._parts)
+        return re.sub(r"\n{3,}", "\n\n", raw)
+
+
+def _extract_html_text(html: str) -> str:
+    """HTML 문자열에서 가시 텍스트 추출."""
+    extractor = _HtmlTextExtractor()
+    try:
+        extractor.feed(html)
+    except Exception:
+        pass
+    return extractor.get_text()
+
+
+def _decode_bytes(data: bytes) -> str:
+    """바이트를 UTF-8 → EUC-KR → CP949 순으로 디코딩."""
+    for enc in ("utf-8", "euc-kr", "cp949"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
 
 
 class DartClient:
@@ -345,3 +396,89 @@ class DartClient:
             },
             use_cache=True,
         )
+
+    # ── 공시 원문 ─────────────────────────────────────────────────
+
+    async def get_document_text(
+        self,
+        rcept_no: str,
+        section_keyword: str = "",
+        max_chars: int = 6000,
+    ) -> dict:
+        """공시 원문 ZIP을 다운로드해 HTML 텍스트를 추출한다.
+
+        DART document.json 엔드포인트는 성공 시 ZIP 바이너리를,
+        실패 시 JSON 에러 응답을 반환한다.
+        """
+        resp = await self._raw_get(
+            "/document.json",
+            {"crtfc_key": self.api_key, "rcept_no": rcept_no},
+            timeout=60.0,
+        )
+
+        # 에러 응답은 JSON으로 반환됨
+        content_type = resp.headers.get("content-type", "")
+        if "json" in content_type or resp.content[:1] == b"{":
+            try:
+                data = resp.json()
+                status = data.get("status", "000")
+                if status != "000":
+                    raise RuntimeError(
+                        f"DART API 오류 [{status}]: {data.get('message', '알 수 없는 오류')}"
+                    )
+            except Exception as e:
+                if isinstance(e, RuntimeError):
+                    raise
+                raise RuntimeError(f"DART 응답 파싱 실패: {e}") from e
+
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(resp.content))
+        except zipfile.BadZipFile:
+            raise RuntimeError(
+                f"rcept_no={rcept_no!r} 문서를 ZIP으로 열 수 없습니다. "
+                "접수번호가 올바른지 확인하세요."
+            )
+
+        with zf:
+            names = zf.namelist()
+            html_files = sorted(
+                n for n in names if n.lower().endswith((".htm", ".html"))
+            )
+            if not html_files:
+                return {
+                    "rcept_no": rcept_no,
+                    "error": "ZIP 내 HTML 파일 없음",
+                    "files": names,
+                }
+
+            parts: list[str] = []
+            for fname in html_files:
+                raw = zf.read(fname)
+                text = _extract_html_text(_decode_bytes(raw))
+                if text.strip():
+                    parts.append(text)
+
+        full_text = "\n\n".join(parts)
+
+        # 섹션 키워드 필터: 키워드 발견 위치 기준으로 앞뒤 컨텍스트 반환
+        if section_keyword and section_keyword in full_text:
+            idx = full_text.find(section_keyword)
+            start = max(0, idx - 300)
+            excerpt = full_text[start: start + max_chars]
+            return {
+                "rcept_no": rcept_no,
+                "section_keyword": section_keyword,
+                "text": excerpt,
+                "total_chars": len(full_text),
+                "returned_chars": len(excerpt),
+                "truncated": (start + max_chars) < len(full_text),
+            }
+
+        excerpt = full_text[:max_chars]
+        return {
+            "rcept_no": rcept_no,
+            "text": excerpt,
+            "total_chars": len(full_text),
+            "returned_chars": len(excerpt),
+            "truncated": len(full_text) > max_chars,
+        }

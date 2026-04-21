@@ -891,3 +891,49 @@ async def test_bridge_fallback_to_name_match():
 async def test_bridge_invalid_corp_code():
     result = await server.dart_to_fisis_bridge(corp_code="invalid")
     assert result.startswith("[input error]")
+
+
+# ── dart_document_content ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_document_content_success():
+    """정상 문서 조회 시 텍스트와 메타정보를 반환한다."""
+    mock_client = MagicMock()
+    mock_client.get_document_text = AsyncMock(return_value={
+        "rcept_no": "20240101000001",
+        "text": "삼성전자 사업보고서 주석 내용",
+        "total_chars": 30,
+        "returned_chars": 30,
+        "truncated": False,
+    })
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_document_content(
+            rcept_no="20240101000001",
+            section_keyword="주석",
+            max_chars=6000,
+        )
+
+    data = json.loads(result)
+    assert data["text"] == "삼성전자 사업보고서 주석 내용"
+    assert data["truncated"] is False
+    mock_client.get_document_text.assert_called_once_with(
+        "20240101000001", section_keyword="주석", max_chars=6000
+    )
+
+
+@pytest.mark.asyncio
+async def test_document_content_invalid_rcept_no():
+    """14자리가 아닌 rcept_no는 [input error]를 반환한다."""
+    result = await server.dart_document_content(rcept_no="1234")
+    assert result.startswith("[input error]")
+
+
+@pytest.mark.asyncio
+async def test_document_content_invalid_max_chars():
+    """max_chars 범위 초과 시 [input error]를 반환한다."""
+    result = await server.dart_document_content(
+        rcept_no="20240101000001", max_chars=99999
+    )
+    assert result.startswith("[input error]")

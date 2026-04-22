@@ -557,8 +557,9 @@ def test_fisis_extract_list_non_dict_input():
 
 
 @pytest.mark.asyncio
-async def test_bridge_insurance_induty_code():
-    """보험 업종코드(6511) → FISIS C(보험)."""
+async def test_bridge_insurance_induty_code_marked_unverified():
+    """보험 업종코드(6511)는 금융기관이지만 FISIS lrg_div가 라이브 검증 전이므로
+    fisis_lrg_div=None + note 안내로 반환되어야 한다 (이전 'C=보험' 임의 매핑 제거)."""
     mock_client = MagicMock()
     mock_client.get_company_overview = AsyncMock(return_value={
         "corp_name": "삼성생명", "induty_code": "6511", "corp_cls": "Y",
@@ -569,20 +570,93 @@ async def test_bridge_insurance_induty_code():
 
     data = json.loads(result)
     assert data["is_financial"] is True
-    assert data["fisis_lrg_div"] == "C"
+    assert data["fisis_lrg_div"] is None
     assert "보험" in data["fisis_sector"]
+    assert "DART 재무제표" in data["note"]
 
 
 @pytest.mark.asyncio
-async def test_bridge_trust_keyword_fallback():
-    """'신탁' 키워드 → FISIS B(비은행)."""
+async def test_bridge_lease_induty_code_64911():
+    """업종코드 64911(시설대여/리스) → FISIS K(리스사)로 매핑되어야 한다.
+    5자리 코드를 4자리(6491)보다 우선 매칭해야 함."""
     mock_client = MagicMock()
     mock_client.get_company_overview = AsyncMock(return_value={
-        "corp_name": "한국투자신탁운용", "induty_code": "7777", "corp_cls": "E",
+        "corp_name": "데라게란덴㈜", "induty_code": "64911", "corp_cls": "E",
+    })
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_to_fisis_bridge(corp_code="00609193")
+
+    data = json.loads(result)
+    assert data["is_financial"] is True
+    assert data["fisis_lrg_div"] == "K"
+    assert data["fisis_sector"] == "리스사"
+    assert data["matched_by"] == "64911"
+    assert "lrg_div='K'" in data["next_step"]
+
+
+@pytest.mark.asyncio
+async def test_bridge_installment_keyword():
+    """'할부' 키워드 → FISIS T(할부금융사)."""
+    mock_client = MagicMock()
+    mock_client.get_company_overview = AsyncMock(return_value={
+        "corp_name": "현대할부금융", "induty_code": "9999", "corp_cls": "E",
+    })
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_to_fisis_bridge(corp_code="00555555")
+
+    data = json.loads(result)
+    assert data["is_financial"] is True
+    assert data["fisis_lrg_div"] == "T"
+    assert data["fisis_sector"] == "할부금융사"
+
+
+@pytest.mark.asyncio
+async def test_bridge_capital_marked_unregistered():
+    """캐피탈사는 FISIS 미등록(L565)이므로 fisis_lrg_div=None으로 안내."""
+    mock_client = MagicMock()
+    mock_client.get_company_overview = AsyncMock(return_value={
+        "corp_name": "현대캐피탈", "induty_code": "9999", "corp_cls": "E",
+    })
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_to_fisis_bridge(corp_code="00666666")
+
+    data = json.loads(result)
+    assert data["is_financial"] is True
+    assert data["fisis_lrg_div"] is None
+    assert "캐피탈" in data["fisis_sector"]
+
+
+@pytest.mark.asyncio
+async def test_bridge_asset_management_keyword_priority():
+    """회사명에 '자산운용'이 명시된 자산운용사는 D(금융투자)로 매핑되어야 하며,
+    매핑 정의 순서상 '자산운용'이 '신탁'보다 우선 검색되어야 한다."""
+    mock_client = MagicMock()
+    mock_client.get_company_overview = AsyncMock(return_value={
+        "corp_name": "미래에셋자산운용", "induty_code": "7777", "corp_cls": "E",
     })
 
     with patch.object(server, "_dart", return_value=mock_client):
         result = await server.dart_to_fisis_bridge(corp_code="00333333")
+
+    data = json.loads(result)
+    assert data["is_financial"] is True
+    assert data["fisis_lrg_div"] == "D"
+    assert data["matched_by"] == "자산운용"
+
+
+@pytest.mark.asyncio
+async def test_bridge_pure_trust_company_still_b():
+    """업종코드 매칭이 없고 회사명이 '신탁'만 가진 경우는 B(비은행/신탁)로 유지."""
+    mock_client = MagicMock()
+    mock_client.get_company_overview = AsyncMock(return_value={
+        "corp_name": "○○신탁", "induty_code": "7777", "corp_cls": "E",
+    })
+
+    with patch.object(server, "_dart", return_value=mock_client):
+        result = await server.dart_to_fisis_bridge(corp_code="00777777")
 
     data = json.loads(result)
     assert data["is_financial"] is True

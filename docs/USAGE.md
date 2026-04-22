@@ -136,20 +136,22 @@ Claude Code에서 그대로 복사해서 써보세요.
 > **질문**: "2024년 국내 은행 요약재무제표 보여줘"
 >
 > **도구 흐름**:
-> 1. `fisis_list_statistics(lrg_div='01')` → 은행 통계 목록에서 stat_cd 확인
-> 2. `fisis_list_companies(lrg_div='01')` → 은행 목록 확인
-> 3. `fisis_get_statistics(stat_cd='<확인한코드>', strt_yymm='202401', end_yymm='202412', lrg_div='01')`
+> 1. `fisis_list_statistics(lrg_div='A')` → 은행 통계 목록에서 stat_cd 확인
+> 2. `fisis_list_companies(lrg_div='A')` → 은행 목록 확인
+> 3. `fisis_get_statistics(stat_cd='<확인한코드>', strt_yymm='202401', end_yymm='202412', lrg_div='A')`
 
 ---
 
-### 9. 보험사 / 금융투자업권 비교
+### 9. 리스사 / 금융투자업권 조회
 
-> **질문**: "삼성생명과 삼성화재 총자산 추이 (최근 1년)"
+> **질문**: "데라게란덴 finance_cd 확인하고 리스사 손익계산서 조회"
 >
 > **도구 흐름**:
-> 1. `fisis_list_companies(lrg_div='03')` → 삼성생명/삼성화재 finance_cd 확인
-> 2. `fisis_list_statistics(lrg_div='03')` → 자산 관련 통계코드 확인
-> 3. `fisis_get_statistics(stat_cd='...', strt_yymm='202401', end_yymm='202412', finance_cd='...')` (2번 호출)
+> 1. `fisis_list_companies(lrg_div='K')` → 리스사 목록에서 데라게란덴 finance_cd(예: 0011663) 확인
+> 2. `fisis_list_statistics(lrg_div='C')` → 여신전문 통계코드 확인 (통계는 lrgDiv=C로 묶임)
+> 3. `fisis_get_statistics(stat_cd='SC218', strt_yymm='202401', end_yymm='202412', finance_cd='0011663')`
+>
+> **참고**: 회사구분(partDiv)은 A/B/C/D/K/T로 세분되지만, 통계 분류(lrgDiv)는 여신전문이 C로 묶임.
 
 ---
 

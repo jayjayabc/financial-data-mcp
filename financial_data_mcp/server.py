@@ -311,7 +311,15 @@ _DATA_CATALOG = {
         },
         "granularity": "업권 전체 또는 개별 금융기관. 1회 호출 = 업권 전체 데이터.",
         "period": "월별 (YYYYMM ~ YYYYMM 범위 지정)",
-        "lrg_div": {"A": "은행(국내은행)", "B": "비은행(신탁회사)", "C": "여신전문금융사·카드사", "D": "금융투자(증권·자산운용)"},
+        "lrg_div": {
+            "A": "은행(국내은행)",
+            "B": "비은행(신탁회사)",
+            "C": "신용카드사",
+            "D": "금융투자(증권·자산운용)",
+            "K": "리스사",
+            "T": "할부금융사",
+            "_note": "회사 분류(partDiv)는 A/B/C/D/K/T 등 세분되지만, 통계(lrgDiv) 코드는 일부가 C에 묶여 있을 수 있음. fisis_list_statistics와 fisis_list_companies 결과로 확인.",
+        },
         "strength": [
             "1회 호출로 업권 전체 금융기관 데이터 조회",
             "금감원 표준 양식으로 기관 간 항목명 일관",
@@ -379,8 +387,12 @@ _DATA_CATALOG = {
                     "SB011": "특정금전수탁현황(증권, 14.03이후)",
                 },
             },
-            "여신전문금융사_카드(lrg_div=C)": {
-                "_note": "카드·캐피탈·할부금융·리스사 통계 (FISIS API에서 lrg_div=C)",
+            "여신전문금융_통계(lrgDiv=C)": {
+                "_note": (
+                    "여신전문업(신용카드·캐피탈·할부금융·리스사) 통계는 lrgDiv=C로 묶여 조회됨. "
+                    "단 회사 목록(fisis_list_companies)은 partDiv=C(신용카드), K(리스), T(할부)로 분리됨. "
+                    "통계 lrgDiv 분류와 회사 partDiv 분류는 다른 체계임에 주의."
+                ),
                 "_재무현황": {
                     "SC103": "요약재무상태표(자산)(08.03이후)",
                     "SC104": "요약재무상태표(부채 및 자본)(08.03이후)",
@@ -464,7 +476,7 @@ _DATA_CATALOG = {
             "부실채권비율_NPL": "SA054",
             "대손충당금": "SA025",
         },
-        "여신전문_카드(lrg_div=C)": {
+        "여신전문_통계(lrgDiv=C: 카드·캐피탈·할부·리스 통합)": {
             "요약손익계산서_최신(18.12이후)": "SC218",
             "여신건전성": "SC008",
             "연체채권비율": "SC117",
@@ -560,13 +572,21 @@ _DATA_CATALOG = {
     },
     "fisis_registration_status": {
         "description": "업권별 FISIS 등록 여부 — 미등록 업권은 DART 단독 전략 적용 (ACT-009)",
-        "등록_업권": ["국내은행 (lrg_div=A)", "신용카드사 (lrg_div=C)", "증권사·자산운용사 (lrg_div=D)"],
-        "미등록_DART_단독": [
-            "캐피탈사 (현대캐피탈·KB캐피탈·신한캐피탈 등 여신전문-리스/할부) — FISIS 교차검증 불가",
-            "저축은행 (일부만 등록)",
-            "상호금융 (농협·수협·신협·새마을금고)",
+        "등록_업권": [
+            "국내은행 (partDiv=A)",
+            "신탁회사 (partDiv=B)",
+            "신용카드사 (partDiv=C)",
+            "증권사·자산운용사 (partDiv=D)",
+            "리스사 (partDiv=K)",
+            "할부금융사 (partDiv=T)",
         ],
-        "rule": "캐피탈사·저축은행 분석 시 FISIS 조회를 시도하지 말고 DART 재무제표 단독 전략을 사용하라. 이를 data_gaps에 명시.",
+        "미등록_또는_검증필요": [
+            "캐피탈사 (FISIS 회사 목록 미등록 — DART 단독)",
+            "저축은행 (일부만 등록 — fisis_list_companies로 확인)",
+            "상호금융 (농협·수협·신협·새마을금고 — 미등록)",
+            "보험사 (FISIS lrg_div 코드 라이브 검증 필요)",
+        ],
+        "rule": "위 미등록·검증필요 업권은 dart_to_fisis_bridge가 fisis_lrg_div=null로 반환. FISIS 조회 시도하지 말고 DART 재무제표 단독 전략을 사용하라. 이를 data_gaps에 명시.",
     },
 }
 
@@ -1263,7 +1283,7 @@ async def fisis_list_statistics(
     fisis_get_statistics 로 실제 데이터를 조회하세요.
 
     Args:
-        lrg_div: 대분류 (A=은행, B=비은행, C=보험, D=금융투자, 비워두면 전체)
+        lrg_div: 대분류 (A=은행, B=비은행/신탁, C=신용카드사·여신전문통계, D=금융투자, K=리스사, T=할부금융사, 비워두면 전체)
         sml_div: 소분류 (비워두면 전체)
     """
     data = await _fisis().list_statistics(lrg_div, sml_div)
@@ -1293,7 +1313,7 @@ async def fisis_get_statistics(
         strt_yymm: 조회 시작월 (YYYYMM, 예: "202401")
         end_yymm: 조회 종료월 (YYYYMM, 예: "202412")
         finance_cd: 금융회사코드 (비워두면 전체)
-        lrg_div: 대분류 코드 (A=은행, B=비은행, C=보험, D=금융투자)
+        lrg_div: 대분류 코드 (A=은행, B=비은행/신탁, C=신용카드사·여신전문통계, D=금융투자, K=리스사, T=할부금융사)
         sml_div: 소분류 코드
         term: 조회 주기 — Q(분기, 기본값) 또는 Y(연간)
     """
@@ -1337,7 +1357,7 @@ async def fisis_get_multi_statistics(
         strt_yymm: 조회 시작월 (YYYYMM)
         end_yymm: 조회 종료월 (YYYYMM)
         finance_cd: 금융회사코드 (비워두면 전체)
-        lrg_div: 대분류 코드 (A=은행, B=비은행, C=보험, D=금융투자)
+        lrg_div: 대분류 코드 (A=은행, B=비은행/신탁, C=신용카드사·여신전문통계, D=금융투자, K=리스사, T=할부금융사)
         sml_div: 소분류 코드
         term: 조회 주기 — Q(분기) 또는 Y(연간)
     """
@@ -1379,12 +1399,12 @@ async def fisis_list_companies(
 ) -> str:
     """FISIS에 등록된 금융회사 목록을 조회합니다.
 
-    특정 권역의 회사 목록과 finance_cd 를 확인할 때 사용.
+    특정 권역의 회사 목록과 finance_cd 를 확인할 때 사용. 내부적으로 partDiv 파라미터로 전달됩니다.
 
     Args:
-        lrg_div: 대분류 (A=은행, B=비은행, C=보험, D=금융투자)
+        lrg_div: 대분류/회사구분 (A=은행, B=비은행/신탁, C=신용카드사, D=금융투자, K=리스사, T=할부금융사)
         sml_div: 소분류
-        finance_cd: 금융회사코드 (특정 회사만 조회 시)
+        finance_cd: 금융회사코드 (특정 회사만 조회 시, 예: 0011663 = 데라게란덴)
     """
     data = await _fisis().list_companies(lrg_div, sml_div, finance_cd)
     return _json(_fisis_extract_list(data))
@@ -1394,36 +1414,57 @@ async def fisis_list_companies(
 #  DART ↔ FISIS 연결 도구
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# DART 업종코드 → FISIS 대분류 매핑 (금감원 업종 분류 기반)
+# DART 업종코드 → FISIS 대분류(lrg_div / partDiv) 매핑.
+# FISIS 권역 코드: A=은행, B=비은행(신탁), C=신용카드사, D=금융투자(증권·자산운용),
+#                K=리스사, T=할부금융사. (CLAUDE.md 및 fisis_registration_status 기준)
+# 자산운용사가 회사명에 '신탁'을 포함하는 경우(예: 한국투자신탁운용)를 D로 잡기 위해
+# '자산운용' 키워드를 '신탁'보다 앞에 배치한다 (dict 삽입 순서 기준 fallback 검색).
 _INDUTY_TO_FISIS_DIV: dict[str, tuple[str, str]] = {
-    # 은행 업종코드
+    # ── 은행 (lrg_div=A) ──
     "은행": ("A", "은행"),
     "641": ("A", "은행"),
     "6411": ("A", "은행"),
     "6412": ("A", "은행"),
-    # 금융투자 (증권, 자산운용)
+    # ── 금융투자 — 증권·자산운용 (lrg_div=D) ──
+    # '자산운용'을 '신탁'보다 먼저 두어 자산운용사 회사명 fallback에서 우선 매칭.
+    "자산운용": ("D", "금융투자"),
     "증권": ("D", "금융투자"),
     "661": ("D", "금융투자"),
     "6611": ("D", "금융투자"),
     "6612": ("D", "금융투자"),
-    "자산운용": ("D", "금융투자"),
-    # 보험
-    "보험": ("C", "보험"),
-    "651": ("C", "보험"),
-    "6511": ("C", "보험"),
-    "6512": ("C", "보험"),
-    "생명보험": ("C", "보험"),
-    "손해보험": ("C", "보험"),
-    # 여신전문 (카드, 캐피탈, 리스, 할부)
-    "카드": ("C", "여신전문금융"),
-    "리스": ("C", "여신전문금융"),
-    "할부": ("C", "여신전문금융"),
-    "캐피탈": ("C", "여신전문금융"),
-    "649": ("C", "여신전문금융"),
-    "6491": ("C", "여신전문금융"),
-    "6492": ("C", "여신전문금융"),
-    # 신탁
-    "신탁": ("B", "비은행"),
+    # ── 신용카드사 (lrg_div=C) ──
+    "신용카드": ("C", "신용카드사"),
+    "카드": ("C", "신용카드사"),
+    # ── 리스사 (lrg_div=K) ──
+    # 64911 = 시설대여업(리스). 5자리 코드를 4자리(6491)보다 우선 매칭하도록
+    # dart_to_fisis_bridge에서 induty_code 전체값을 먼저 조회한다.
+    "리스": ("K", "리스사"),
+    "64911": ("K", "리스사"),
+    # ── 할부금융사 (lrg_div=T) ──
+    # 64912 = 할부금융업 (FISIS API 검증 전 추정값 — 라이브 호출로 추후 확정 필요).
+    "할부금융": ("T", "할부금융사"),
+    "할부": ("T", "할부금융사"),
+    "64912": ("T", "할부금융사"),
+    # ── 신탁회사 (lrg_div=B) ──
+    "신탁": ("B", "비은행(신탁)"),
+}
+
+# FISIS에 등록되지 않았거나 lrg_div 코드가 아직 라이브 API로 검증되지 않은 금융업종.
+# bridge 호출 시 is_financial=True 로 분류하되 fisis_lrg_div는 비워서 반환하고,
+# DART 단독 분석 또는 추가 검증이 필요함을 사용자에게 안내한다.
+# - 보험: FISIS lrg_div 코드 미확정 (E/F 추정이나 검증 필요)
+# - 캐피탈: fisis_registration_status에서 "캐피탈사 FISIS 미등록"으로 명시됨
+# - 저축은행, 상호금융, 농협/수협/신협/새마을금고: 동일 사유
+_UNVERIFIED_FINANCIAL_KEYWORDS: dict[str, str] = {
+    "651": "보험",
+    "6511": "생명보험",
+    "6512": "손해보험",
+    "생명보험": "생명보험",
+    "손해보험": "손해보험",
+    "보험": "보험",
+    "캐피탈": "캐피탈(여신전문 — FISIS 미등록)",
+    "저축은행": "저축은행",
+    "상호금융": "상호금융",
 }
 
 
@@ -1450,20 +1491,43 @@ async def dart_to_fisis_bridge(corp_code: str) -> str:
     fisis_label = None
     matched_key = None
 
-    # 업종코드 직접 매칭 (상위→하위 순)
-    for key in (induty_code, induty_code[:3] if len(induty_code) >= 3 else ""):
-        if key and key in _INDUTY_TO_FISIS_DIV:
+    # 업종코드 직접 매칭 — 5자리(예: 64911) → 4자리 → 3자리 순으로 좁은 범위 우선.
+    candidate_keys: list[str] = []
+    if induty_code:
+        candidate_keys.append(induty_code)
+        if len(induty_code) > 4:
+            candidate_keys.append(induty_code[:4])
+        if len(induty_code) > 3:
+            candidate_keys.append(induty_code[:3])
+    for key in candidate_keys:
+        if key in _INDUTY_TO_FISIS_DIV:
             fisis_div, fisis_label = _INDUTY_TO_FISIS_DIV[key]
             matched_key = key
             break
 
-    # 회사명 키워드 매칭 (fallback)
+    # 회사명 키워드 매칭 (fallback) — dict 삽입 순서대로 검색되므로
+    # 자산운용→신탁 등 우선순위가 매핑 정의 순서를 따른다.
     if not fisis_div:
         for keyword, (div, label) in _INDUTY_TO_FISIS_DIV.items():
             if not keyword.isdigit() and keyword in corp_name:
                 fisis_div, fisis_label = div, label
                 matched_key = keyword
                 break
+
+    # 미확정/미등록 금융업종 매칭 (보험·캐피탈·저축은행 등)
+    unverified_label: str | None = None
+    unverified_key: str | None = None
+    if not fisis_div:
+        for key in candidate_keys:
+            if key in _UNVERIFIED_FINANCIAL_KEYWORDS:
+                unverified_label = _UNVERIFIED_FINANCIAL_KEYWORDS[key]
+                unverified_key = key
+                break
+        if unverified_label is None:
+            for keyword, label in _UNVERIFIED_FINANCIAL_KEYWORDS.items():
+                if not keyword.isdigit() and keyword in corp_name:
+                    unverified_label, unverified_key = label, keyword
+                    break
 
     result: dict[str, Any] = {
         "corp_code": corp_code,
@@ -1483,6 +1547,19 @@ async def dart_to_fisis_bridge(corp_code: str) -> str:
                 f"lrg_div='{fisis_div}'를 사용하세요. "
                 f"개별 기관 통계는 fisis_list_companies(lrg_div='{fisis_div}')로 "
                 f"finance_cd를 먼저 확인하세요."
+            ),
+        })
+    elif unverified_label:
+        result.update({
+            "is_financial": True,
+            "fisis_lrg_div": None,
+            "fisis_sector": unverified_label,
+            "matched_by": unverified_key,
+            "note": (
+                f"'{corp_name}'은(는) 금융기관({unverified_label})으로 식별되었으나 "
+                "FISIS lrg_div 코드가 아직 검증되지 않았거나 FISIS에 등록되지 않았습니다. "
+                "DART 재무제표 기반 분석을 사용하고, 필요 시 fisis_list_companies()로 "
+                "직접 확인하세요."
             ),
         })
     else:

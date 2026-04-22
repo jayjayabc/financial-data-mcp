@@ -1,12 +1,15 @@
-"""라이브 FISIS API로 lrg_div 매핑을 검증한다.
+"""라이브 FISIS API로 전 권역 레지스트리를 구축하고 lrg_div 매핑을 검증한다.
 
-4가지 진단 항목:
-1. A~M 각 lrg_div 코드가 실제로 존재하고 어떤 업권인지
-2. dart_to_fisis_bridge('00609193') 데라게란덴이 K/리스사로 반환되는지
-3. fisis_list_companies(lrg_div='K')에서 데라게란덴(0011663) 조회 가능한지
-4. 64911(DART 업종코드) → K 매핑이 실제 데라게란덴 corp_overview 응답과 일치하는지
+검증 항목:
+1. FisisRegistry.ensure_loaded 로 A~Z 전 권역 회사목록을 한 번에 수집
+2. 권역별 등록 회사 수 + 한글 라벨(lrg_div_nm) 요약
+3. 데라게란덴(0011663) → K/리스사 조회 확인
+4. 투자일임업 등 하드코딩에 없는 권역도 함께 포착되는지 확인
+5. 전체 스냅샷을 scripts/fisis_registry_snapshot.json 으로 저장
+   (필요 시 checked into repo 하여 오프라인 참조 자료로 활용 가능)
 
-보험·캐피탈·할부금융 unverified 항목도 함께 확인한다.
+실행: `uv run python scripts/verify_lrg_div_mapping.py`
+환경변수: FISIS_API_KEY, DART_API_KEY (.env 로드)
 """
 
 from __future__ import annotations
@@ -20,135 +23,126 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
+
 load_dotenv(ROOT / ".env")
 
-from financial_data_mcp.fisis_client import FisisClient  # noqa: E402
+from financial_data_mcp._fisis_registry import FisisRegistry  # noqa: E402
 from financial_data_mcp.dart_client import DartClient  # noqa: E402
+from financial_data_mcp.fisis_client import FisisClient  # noqa: E402
 from financial_data_mcp import server  # noqa: E402
 
 
-async def dump_lrg_div_partDiv(fisis: FisisClient) -> dict[str, list[dict]]:
-    """companySearch.json에 A~Z 각 partDiv로 호출하여 등록된 권역을 덤프."""
-    results: dict[str, list[dict]] = {}
-    for code in [chr(c) for c in range(ord("A"), ord("Z") + 1)]:
-        try:
-            data = await fisis.list_companies(lrg_div=code)
-            raw = data.get("result", data) if isinstance(data, dict) else data
-            items = raw.get("list") if isinstance(raw, dict) else None
-            if isinstance(items, list) and items:
-                results[code] = items
-        except Exception as e:
-            results[code] = [{"_error": str(e)}]
-    return results
-
-
-async def dump_lrg_div_statistics(fisis: FisisClient) -> dict[str, list[dict]]:
-    """statisticsListSearch.json에 A~Z 각 lrgDiv로 호출."""
-    results: dict[str, list[dict]] = {}
-    for code in [chr(c) for c in range(ord("A"), ord("Z") + 1)]:
-        try:
-            data = await fisis.list_statistics(lrg_div=code)
-            raw = data.get("result", data) if isinstance(data, dict) else data
-            items = raw.get("list") if isinstance(raw, dict) else None
-            if isinstance(items, list) and items:
-                results[code] = items
-        except Exception as e:
-            results[code] = [{"_error": str(e)}]
-    return results
-
-
-def summarize(items: list[dict], limit: int = 3) -> list[dict]:
-    """응답 샘플만 요약."""
-    if items and isinstance(items[0], dict) and "_error" in items[0]:
-        return items
-    out = []
-    for it in items[:limit]:
-        out.append({k: v for k, v in it.items() if k in ("finance_cd", "finance_nm", "lrg_div_nm", "sml_div_nm", "list_no", "list_nm")})
-    return out + ([{"_total_count": len(items)}] if len(items) > limit else [])
+SNAPSHOT_PATH = ROOT / "scripts" / "fisis_registry_snapshot.json"
 
 
 async def main() -> None:
     fisis_key = os.environ.get("FISIS_API_KEY", "")
     dart_key = os.environ.get("DART_API_KEY", "")
     if not fisis_key or not dart_key:
-        print("!! API 키 누락"); return
+        print("!! .env 에 FISIS_API_KEY, DART_API_KEY 설정 필요")
+        sys.exit(1)
 
     fisis = FisisClient(fisis_key)
     dart = DartClient(dart_key)
 
     print("=" * 70)
-    print("[1] FISIS companySearch.json — A~Z partDiv 회사 목록 덤프")
+    print("[1] FisisRegistry 부트스트랩 — A~Z 전 권역 병렬 조회")
     print("=" * 70)
-    comp = await dump_lrg_div_partDiv(fisis)
-    for code, items in comp.items():
-        sample = summarize(items)
-        print(f"\npartDiv={code}: {len(items)}건")
-        for s in sample:
-            print(f"  {s}")
+    registry = FisisRegistry()
+    await registry.ensure_loaded(fisis)
+    print(f"\n총 회사 수: {len(registry.by_finance_cd)}")
+    print(f"발견 권역 수: {len(registry.sectors())}")
+    print(f"로드 에러: {len(registry.load_errors)} 코드")
+
+    print("\n권역별 등록 요약:")
+    for code, info in registry.sectors().items():
+        print(f"  {code}: {info['lrg_div_nm']:15s} ({info['company_count']}개)")
+
+    if registry.load_errors:
+        print("\n로드 에러 (참고):")
+        for code, err in list(registry.load_errors.items())[:5]:
+            print(f"  {code}: {err}")
 
     print("\n" + "=" * 70)
-    print("[2] FISIS statisticsListSearch.json — A~Z lrgDiv 통계 목록 덤프")
+    print("[2] 데라게란덴(0011663) 조회")
     print("=" * 70)
-    stats = await dump_lrg_div_statistics(fisis)
-    for code, items in stats.items():
-        sample = summarize(items)
-        print(f"\nlrgDiv={code}: {len(items)}건")
-        for s in sample:
-            print(f"  {s}")
+    hit = registry.lookup_by_finance_cd("0011663")
+    if hit:
+        print(f"  finance_cd={hit.finance_cd}, finance_nm={hit.finance_nm}")
+        print(f"  lrg_div={hit.lrg_div}, lrg_div_nm={hit.lrg_div_nm}")
+    else:
+        print("  !! 데라게란덴(0011663) 레지스트리에서 찾을 수 없음")
+        print("  K 권역 샘플:")
+        k_companies = [c for c in registry.by_finance_cd.values() if c.lrg_div == "K"]
+        for c in k_companies[:5]:
+            print(f"    {c.finance_cd} | {c.finance_nm}")
+
+    by_name = registry.lookup_by_name("데라게란덴㈜")
+    print(f"\n  lookup_by_name('데라게란덴㈜'): {by_name}")
 
     print("\n" + "=" * 70)
-    print("[3] 데라게란덴 시나리오")
+    print("[3] dart_to_fisis_bridge 엔드투엔드 — 데라게란덴")
     print("=" * 70)
-    # 3-1: DART corp_overview로 업종코드 확인
-    try:
-        overview = await dart.get_company_overview("00609193")
-        print(f"\nDART get_company_overview('00609193'):")
-        print(f"  corp_name={overview.get('corp_name')}")
-        print(f"  induty_code={overview.get('induty_code')}")
-        print(f"  corp_cls={overview.get('corp_cls')}")
-    except Exception as e:
-        print(f"  DART 에러: {e}")
-
-    # 3-2: dart_to_fisis_bridge 호출
     os.environ["DART_API_KEY"] = dart_key
     os.environ["FISIS_API_KEY"] = fisis_key
+    server._fisis_registry.cache_clear()
     try:
         result = await server.dart_to_fisis_bridge("00609193")
-        data = json.loads(result)
-        print(f"\nserver.dart_to_fisis_bridge('00609193'):")
-        for k, v in data.items():
+        for k, v in json.loads(result).items():
             print(f"  {k}: {v}")
-    except Exception as e:
-        print(f"  bridge 에러: {e}")
-
-    # 3-3: fisis_list_companies(lrg_div='K')에서 데라게란덴 찾기
-    try:
-        data = await fisis.list_companies(lrg_div="K")
-        raw = data.get("result", data) if isinstance(data, dict) else data
-        items = raw.get("list") if isinstance(raw, dict) else []
-        print(f"\nfisis_list_companies(lrg_div='K'): 총 {len(items)}건")
-        matches = [it for it in items if "데라게란덴" in (it.get("finance_nm") or "") or it.get("finance_cd") == "0011663"]
-        for m in matches:
-            print(f"  MATCH: {m}")
-        if not matches:
-            print("  데라게란덴 미발견. 샘플 3건:")
-            for s in items[:3]:
-                print(f"    {s}")
     except Exception as e:
         print(f"  에러: {e}")
 
     print("\n" + "=" * 70)
-    print("[4] 보험(6511)·할부금융(64912)·캐피탈 lrg_div 확정")
+    print("[4] 하드코딩에 없는 권역 샘플 (투자일임·재보험·신기술금융 등)")
     print("=" * 70)
-    # 보험사 — 삼성생명 corp_code 00126256 (추정) 또는 다른 보험사
-    # 할부금융/캐피탈도 DART 업종코드로 확인
-    for name, corp_code in [("삼성생명", "00126256"), ("현대캐피탈", "00164645"), ("현대카드", "00128564")]:
+    hardcoded_covered = {"A", "B", "C", "D", "K", "T"}
+    extra_sectors = {
+        code: info for code, info in registry.sectors().items()
+        if code not in hardcoded_covered
+    }
+    if extra_sectors:
+        for code, info in extra_sectors.items():
+            samples = [c for c in registry.by_finance_cd.values() if c.lrg_div == code][:3]
+            print(f"  {code}: {info['lrg_div_nm']} ({info['company_count']}개)")
+            for c in samples:
+                print(f"    - {c.finance_cd} | {c.finance_nm}")
+    else:
+        print("  (하드코딩 A/B/C/D/K/T 외 추가 권역 없음 — FISIS 등록 범위 확인 필요)")
+
+    print("\n" + "=" * 70)
+    print(f"[5] 스냅샷 저장 → {SNAPSHOT_PATH.relative_to(ROOT)}")
+    print("=" * 70)
+    snapshot = {
+        "total_companies": len(registry.by_finance_cd),
+        "sectors": registry.sectors(),
+        "load_errors": registry.load_errors,
+        "companies": [
+            {
+                "finance_cd": c.finance_cd,
+                "finance_nm": c.finance_nm,
+                "lrg_div": c.lrg_div,
+                "lrg_div_nm": c.lrg_div_nm,
+            }
+            for c in registry.by_finance_cd.values()
+        ],
+    }
+    SNAPSHOT_PATH.write_text(
+        json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"  저장 완료 ({len(snapshot['companies'])}개 회사)")
+
+    # DART 간단 확인 (선택)
+    print("\n" + "=" * 70)
+    print("[6] DART corp_overview — 업종코드 샘플")
+    print("=" * 70)
+    for name, corp_code in [("데라게란덴", "00609193"), ("삼성생명", "00126256")]:
         try:
             o = await dart.get_company_overview(corp_code)
-            print(f"\n{name} ({corp_code}): corp_name={o.get('corp_name')}, induty_code={o.get('induty_code')}")
+            print(f"  {name} ({corp_code}): induty_code={o.get('induty_code')}, corp_name={o.get('corp_name')}")
         except Exception as e:
-            print(f"  {name} 에러: {e}")
+            print(f"  {name}: {type(e).__name__}: {e}")
 
 
 if __name__ == "__main__":

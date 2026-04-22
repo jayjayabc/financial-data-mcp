@@ -164,6 +164,7 @@ claude mcp add financial-data \
 | `fisis_list_statistics` | 통계 목록 검색 (대분류: A=은행, B=비은행/신탁, C=신용카드사·여신전문통계, D=금융투자, K=리스사, T=할부금융사) |
 | `fisis_get_statistics` | 통계 데이터 조회 (기간·회사·항목별) |
 | `fisis_list_companies` | 금융회사 목록 (권역별) |
+| `fisis_list_sectors` | FISIS에 실제 등록된 전 권역 목록 + 권역별 회사 수 (A~Z 전수조사 기반 동적) |
 
 ### 운영
 

@@ -41,6 +41,7 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 from . import _validators as v
+from ._fisis_registry import FisisRegistry
 from .dart_client import CORP_CLASS, REPORT_CODES, SJ_DIV, DartClient
 from .fisis_client import LARGE_DIVISIONS, FisisClient
 
@@ -132,6 +133,12 @@ def _fisis() -> FisisClient:
             "https://fisis.fss.or.kr 에서 API 키를 발급받으세요."
         )
     return FisisClient(key)
+
+
+@lru_cache(maxsize=1)
+def _fisis_registry() -> FisisRegistry:
+    """FISIS 전 권역 회사 레지스트리 (프로세스 생애 싱글톤, 최초 사용 시 lazy load)."""
+    return FisisRegistry()
 
 
 # ── 직렬화 / 응답 가공 ──────────────────────────────────────────
@@ -1410,6 +1417,25 @@ async def fisis_list_companies(
     return _json(_fisis_extract_list(data))
 
 
+@mcp.tool()
+@_tool_safe
+async def fisis_list_sectors() -> str:
+    """FISIS에 실제 등록된 전체 권역(lrg_div/partDiv) 목록과 권역별 회사 수를 반환합니다.
+
+    서버 생애 1회 FISIS companySearch.json 을 A~Z 전 코드에 대해 호출하여 구축한
+    레지스트리 기반 동적 목록. 어떤 lrg_div 코드가 실재하고 한글명이 무엇인지
+    확인할 때 사용. 각 권역을 더 자세히 보려면 fisis_list_companies(lrg_div=<code>)
+    를 호출하세요.
+    """
+    registry = _fisis_registry()
+    await registry.ensure_loaded(_fisis())
+    return _json({
+        "sectors": registry.sectors(),
+        "total_companies": len(registry.by_finance_cd),
+        "load_errors": registry.load_errors,
+    })
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  DART ↔ FISIS 연결 도구
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1486,12 +1512,34 @@ async def dart_to_fisis_bridge(corp_code: str) -> str:
     induty_code = data.get("induty_code", "")
     corp_cls = data.get("corp_cls", "")
 
-    # 업종코드로 FISIS 대분류 매핑 시도
-    fisis_div = None
-    fisis_label = None
-    matched_key = None
+    # 1차: FISIS 레지스트리 회사명 매칭 (실제 FISIS 등록 권역이 ground truth).
+    # 네트워크 실패·미로드 시 비어있으므로 2차 하드코딩 테이블로 폴백한다.
+    registry = _fisis_registry()
+    registry_loaded = False
+    registry_error: str | None = None
+    try:
+        await registry.ensure_loaded(_fisis())
+        registry_loaded = True
+    except Exception as e:  # noqa: BLE001
+        registry_error = f"{type(e).__name__}: {e}"
+        logger.warning("FisisRegistry 로드 실패 — 하드코딩 매핑으로 폴백: %s", registry_error)
 
-    # 업종코드 직접 매칭 — 5자리(예: 64911) → 4자리 → 3자리 순으로 좁은 범위 우선.
+    fisis_div: str | None = None
+    fisis_label: str | None = None
+    matched_key: str | None = None
+    matched_source: str | None = None
+    fisis_finance_cd: str | None = None
+
+    if registry_loaded:
+        hit = registry.lookup_by_name(corp_name)
+        if hit is not None:
+            fisis_div = hit.lrg_div
+            fisis_label = hit.lrg_div_nm or f"lrg_div={hit.lrg_div}"
+            matched_key = hit.finance_nm
+            matched_source = "fisis_registry"
+            fisis_finance_cd = hit.finance_cd
+
+    # 업종코드 후보 (5→4→3자리) 는 하드코딩 폴백과 미확정 키워드 둘 다에서 쓰임.
     candidate_keys: list[str] = []
     if induty_code:
         candidate_keys.append(induty_code)
@@ -1499,25 +1547,29 @@ async def dart_to_fisis_bridge(corp_code: str) -> str:
             candidate_keys.append(induty_code[:4])
         if len(induty_code) > 3:
             candidate_keys.append(induty_code[:3])
-    for key in candidate_keys:
-        if key in _INDUTY_TO_FISIS_DIV:
-            fisis_div, fisis_label = _INDUTY_TO_FISIS_DIV[key]
-            matched_key = key
-            break
 
-    # 회사명 키워드 매칭 (fallback) — dict 삽입 순서대로 검색되므로
-    # 자산운용→신탁 등 우선순위가 매핑 정의 순서를 따른다.
-    if not fisis_div:
+    # 2차: 하드코딩 업종코드 매핑 (레지스트리가 빈 경우 폴백 또는 레지스트리 miss 보완).
+    if fisis_div is None:
+        for key in candidate_keys:
+            if key in _INDUTY_TO_FISIS_DIV:
+                fisis_div, fisis_label = _INDUTY_TO_FISIS_DIV[key]
+                matched_key = key
+                matched_source = "induty_code_fallback"
+                break
+
+    # 3차: 회사명 키워드 폴백.
+    if fisis_div is None:
         for keyword, (div, label) in _INDUTY_TO_FISIS_DIV.items():
             if not keyword.isdigit() and keyword in corp_name:
                 fisis_div, fisis_label = div, label
                 matched_key = keyword
+                matched_source = "name_keyword_fallback"
                 break
 
-    # 미확정/미등록 금융업종 매칭 (보험·캐피탈·저축은행 등)
+    # 미확정/미등록 금융업종 (보험·캐피탈·저축은행 등)
     unverified_label: str | None = None
     unverified_key: str | None = None
-    if not fisis_div:
+    if fisis_div is None:
         for key in candidate_keys:
             if key in _UNVERIFIED_FINANCIAL_KEYWORDS:
                 unverified_label = _UNVERIFIED_FINANCIAL_KEYWORDS[key]
@@ -1542,6 +1594,7 @@ async def dart_to_fisis_bridge(corp_code: str) -> str:
             "fisis_lrg_div": fisis_div,
             "fisis_sector": fisis_label,
             "matched_by": matched_key,
+            "matched_source": matched_source,
             "next_step": (
                 f"FISIS에서 {fisis_label} 업권 통계를 조회하려면 "
                 f"lrg_div='{fisis_div}'를 사용하세요. "
@@ -1549,6 +1602,8 @@ async def dart_to_fisis_bridge(corp_code: str) -> str:
                 f"finance_cd를 먼저 확인하세요."
             ),
         })
+        if fisis_finance_cd:
+            result["fisis_finance_cd"] = fisis_finance_cd
     elif unverified_label:
         result.update({
             "is_financial": True,

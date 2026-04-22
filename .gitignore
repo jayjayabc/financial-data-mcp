@@ -18,3 +18,7 @@ PLAN.md
 
 # 평가 파이프라인 결과물 (API 응답 데이터, 대용량 차트 포함)
 eval/results/
+
+# FISIS 레지스트리 스냅샷 — 라이브 API 호출 결과. 기본적으로 git 제외.
+# 검증용으로 커밋하고 싶으면 `git add -f scripts/fisis_registry_snapshot.json`
+scripts/fisis_registry_snapshot.json

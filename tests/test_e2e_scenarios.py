@@ -1029,3 +1029,196 @@ async def test_e2e_full_screening_workflow():
     assert list_data["total"] == 5
     assert len(results) == 5
     assert len(high_dividend) == 3  # 00000000, 00000002, 00000004
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  FisisRegistry — 전 권역 동적 레지스트리
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+def _mock_fisis_client_with_sectors(sectors_data: dict[str, list[dict]]) -> MagicMock:
+    """lrg_div → 회사 목록 dict 로부터 list_companies 를 모사하는 FisisClient mock."""
+    mock = MagicMock()
+
+    async def _list_companies(lrg_div="", sml_div="", finance_cd=""):
+        items = sectors_data.get(lrg_div, [])
+        return {"result": {"err_msg": "정상", "list": list(items)}}
+
+    mock.list_companies = AsyncMock(side_effect=_list_companies)
+    return mock
+
+
+@pytest.fixture
+def reset_registry():
+    """각 테스트 후 FisisRegistry 싱글톤을 리셋한다."""
+    from financial_data_mcp import server as srv
+    srv._fisis_registry.cache_clear()
+    yield
+    srv._fisis_registry.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_registry_covers_investment_advisory_sector(reset_registry):
+    """투자일임업 같은 하드코딩에 없는 권역도 레지스트리가 실제 FISIS 등록
+    정보로 매핑해야 한다. partDiv='G'(가상)에 투자일임사가 등록되어 있다고 가정."""
+    sectors = {
+        "G": [
+            {
+                "finance_cd": "0099001",
+                "finance_nm": "○○투자일임",
+                "lrg_div_nm": "투자일임업자",
+            }
+        ],
+    }
+    fisis_mock = _mock_fisis_client_with_sectors(sectors)
+    dart_mock = MagicMock()
+    dart_mock.get_company_overview = AsyncMock(return_value={
+        "corp_name": "○○투자일임",
+        "induty_code": "6631",  # 하드코딩 _INDUTY_TO_FISIS_DIV 에 없는 코드
+        "corp_cls": "E",
+    })
+
+    with patch.object(server, "_dart", return_value=dart_mock), \
+         patch.object(server, "_fisis", return_value=fisis_mock):
+        result = await server.dart_to_fisis_bridge(corp_code="00990011")
+
+    data = json.loads(result)
+    assert data["is_financial"] is True
+    assert data["fisis_lrg_div"] == "G"
+    assert data["fisis_sector"] == "투자일임업자"
+    assert data["matched_source"] == "fisis_registry"
+    assert data["fisis_finance_cd"] == "0099001"
+
+
+@pytest.mark.asyncio
+async def test_registry_lookup_for_lease_company_derage_landen(reset_registry):
+    """데라게란덴 시나리오: partDiv='K' 에 등록되어 있으면 레지스트리가 K 를 반환."""
+    sectors = {
+        "K": [
+            {
+                "finance_cd": "0011663",
+                "finance_nm": "데라게란덴㈜",
+                "lrg_div_nm": "리스사",
+            },
+            {
+                "finance_cd": "0011600",
+                "finance_nm": "기타리스사",
+                "lrg_div_nm": "리스사",
+            },
+        ],
+    }
+    fisis_mock = _mock_fisis_client_with_sectors(sectors)
+    dart_mock = MagicMock()
+    dart_mock.get_company_overview = AsyncMock(return_value={
+        "corp_name": "데라게란덴㈜",
+        "induty_code": "64911",
+        "corp_cls": "E",
+    })
+
+    with patch.object(server, "_dart", return_value=dart_mock), \
+         patch.object(server, "_fisis", return_value=fisis_mock):
+        result = await server.dart_to_fisis_bridge(corp_code="00609193")
+
+    data = json.loads(result)
+    assert data["fisis_lrg_div"] == "K"
+    assert data["fisis_sector"] == "리스사"
+    assert data["fisis_finance_cd"] == "0011663"
+    assert data["matched_source"] == "fisis_registry"
+
+
+@pytest.mark.asyncio
+async def test_registry_falls_back_to_induty_code_when_name_not_registered(reset_registry):
+    """레지스트리가 로드되었지만 DART 회사명이 FISIS 등록 회사와 일치하지 않는 경우,
+    기존 하드코딩 업종코드 매핑으로 폴백해야 한다."""
+    sectors = {
+        "A": [
+            {"finance_cd": "0010001", "finance_nm": "KB국민은행", "lrg_div_nm": "은행"},
+        ],
+    }
+    fisis_mock = _mock_fisis_client_with_sectors(sectors)
+    dart_mock = MagicMock()
+    dart_mock.get_company_overview = AsyncMock(return_value={
+        "corp_name": "신규합병은행",  # 레지스트리에 없음
+        "induty_code": "6412",  # 하드코딩 A 매핑 있음
+        "corp_cls": "Y",
+    })
+
+    with patch.object(server, "_dart", return_value=dart_mock), \
+         patch.object(server, "_fisis", return_value=fisis_mock):
+        result = await server.dart_to_fisis_bridge(corp_code="00999999")
+
+    data = json.loads(result)
+    assert data["fisis_lrg_div"] == "A"
+    assert data["matched_source"] == "induty_code_fallback"
+
+
+@pytest.mark.asyncio
+async def test_registry_load_failure_falls_back_gracefully(reset_registry):
+    """네트워크/인증 오류로 레지스트리 로드 자체가 실패하면
+    하드코딩 매핑이 그대로 동작해야 한다 (기존 커버리지 유지)."""
+
+    def _raise_fisis():
+        raise ValueError("FISIS_API_KEY 환경변수가 설정되지 않았습니다.")
+
+    dart_mock = MagicMock()
+    dart_mock.get_company_overview = AsyncMock(return_value={
+        "corp_name": "데라게란덴㈜",
+        "induty_code": "64911",
+        "corp_cls": "E",
+    })
+
+    with patch.object(server, "_dart", return_value=dart_mock), \
+         patch.object(server, "_fisis", side_effect=_raise_fisis):
+        result = await server.dart_to_fisis_bridge(corp_code="00609193")
+
+    data = json.loads(result)
+    assert data["fisis_lrg_div"] == "K"  # induty_code=64911 하드코딩 폴백
+    assert data["matched_source"] == "induty_code_fallback"
+
+
+@pytest.mark.asyncio
+async def test_fisis_list_sectors_returns_registry_summary(reset_registry):
+    """fisis_list_sectors 도구가 레지스트리에서 발견한 권역을 요약해 반환."""
+    sectors = {
+        "A": [
+            {"finance_cd": "0010001", "finance_nm": "KB국민은행", "lrg_div_nm": "은행"},
+            {"finance_cd": "0010002", "finance_nm": "신한은행", "lrg_div_nm": "은행"},
+        ],
+        "K": [
+            {"finance_cd": "0011663", "finance_nm": "데라게란덴㈜", "lrg_div_nm": "리스사"},
+        ],
+    }
+    fisis_mock = _mock_fisis_client_with_sectors(sectors)
+
+    with patch.object(server, "_fisis", return_value=fisis_mock):
+        result = await server.fisis_list_sectors()
+
+    data = json.loads(result)
+    assert data["total_companies"] == 3
+    assert data["sectors"]["A"] == {"lrg_div_nm": "은행", "company_count": 2}
+    assert data["sectors"]["K"] == {"lrg_div_nm": "리스사", "company_count": 1}
+
+
+@pytest.mark.asyncio
+async def test_registry_fuzzy_name_match(reset_registry):
+    """회사명 정규화(㈜ 제거, 공백 제거)로 FISIS 등록명과 부분 매칭 가능해야 한다."""
+    sectors = {
+        "D": [
+            {"finance_cd": "0030001", "finance_nm": "미래에셋자산운용", "lrg_div_nm": "자산운용"},
+        ],
+    }
+    fisis_mock = _mock_fisis_client_with_sectors(sectors)
+    dart_mock = MagicMock()
+    dart_mock.get_company_overview = AsyncMock(return_value={
+        "corp_name": "미래에셋자산운용㈜",  # DART 에는 ㈜ 포함
+        "induty_code": "6631",
+        "corp_cls": "E",
+    })
+
+    with patch.object(server, "_dart", return_value=dart_mock), \
+         patch.object(server, "_fisis", return_value=fisis_mock):
+        result = await server.dart_to_fisis_bridge(corp_code="00333001")
+
+    data = json.loads(result)
+    assert data["fisis_lrg_div"] == "D"
+    assert data["matched_source"] == "fisis_registry"

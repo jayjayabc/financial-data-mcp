@@ -569,7 +569,7 @@ async def test_bridge_insurance_induty_code():
 
     data = json.loads(result)
     assert data["is_financial"] is True
-    assert data["fisis_lrg_div"] == "C"
+    assert data["fisis_lrg_div"] == "H"  # 생명보험 (6511=생명보험)
     assert "보험" in data["fisis_sector"]
 
 

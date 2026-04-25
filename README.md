@@ -61,15 +61,23 @@ npm install -g @anthropic-ai/claude-code
 
 > **Claude Code가 이미 있으신 분**은 이 단계를 건너뛰세요.
 
-### Step 2. Anthropic API 키 발급
+### Step 2. Claude Code 로그인
 
-Claude Code 사용에는 Anthropic API 키가 필요합니다.
+Claude Code는 두 가지 인증 방식을 지원합니다. **이미 Claude Code를 사용 중이라면 이 단계를 건너뛰세요.**
+
+**방법 A: Claude.ai 구독으로 로그인 (Pro/Max/Team — 대부분 해당)**
+
+```bash
+claude login
+```
+
+브라우저가 열리면 Claude.ai 계정으로 로그인합니다. API 키가 별도로 필요하지 않습니다.
+
+**방법 B: Anthropic API 키 (구독 없이 토큰 과금 방식)**
 
 1. [console.anthropic.com](https://console.anthropic.com) 접속 → 회원가입
 2. **API Keys** 메뉴 → **Create Key**
-3. 발급된 키를 안전한 곳에 저장
-
-처음 로그인하면 Claude Code가 자동으로 키를 물어봅니다.
+3. 발급된 키를 환경변수로 설정: `export ANTHROPIC_API_KEY=발급받은키`
 
 ### Step 3. DART / FISIS API 키 발급
 

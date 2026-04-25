@@ -1,20 +1,8 @@
-# 원본 Excel 데이터 (대용량, git 제외)
-data/*.xlsx
-data/*.csv
-
-# DuckDB는 git에 포함 (Streamlit Cloud 배포용)
-# data/fisis.duckdb → 포함
-
 __pycache__/
 *.pyc
 *.pyo
 .env
 venv/
-.streamlit/secrets.toml
-
-# 불필요 파일
-screenshot*.png
-PLAN.md
 
 # 평가 파이프라인 (로컬 전용)
 .claude/

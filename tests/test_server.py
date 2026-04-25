@@ -259,7 +259,8 @@ async def test_plan_data_query_first_call_includes_catalog():
     assert "DART" in data["data_catalog"]
     assert "FISIS" in data["data_catalog"]
     assert data["data_catalog"]["DART"]["sj_div_filter"]["IS"] == "손익계산서"
-    assert "은행" in data["data_catalog"]["FISIS"]["lrg_div"]["A"]
+    assert "은행" in data["data_catalog"]["FISIS"]["lrg_div"]
+    assert "A" in data["data_catalog"]["FISIS"]["lrg_div"]["은행"]
 
 
 @pytest.mark.asyncio
@@ -835,7 +836,7 @@ async def test_bridge_identifies_bank():
 
 @pytest.mark.asyncio
 async def test_bridge_identifies_securities():
-    """증권사 업종코드(6611)가 FISIS D(금융투자)로 매핑되는지."""
+    """증권사 업종코드(6611)가 FISIS F(투자매매중개업자I)로 매핑되는지."""
     mock_client = MagicMock()
     mock_client.get_company_overview = AsyncMock(return_value={
         "corp_name": "미래에셋증권",
@@ -848,7 +849,7 @@ async def test_bridge_identifies_securities():
 
     data = json.loads(result)
     assert data["is_financial"] is True
-    assert data["fisis_lrg_div"] == "D"
+    assert data["fisis_lrg_div"] == "F"  # 증권사 = 투자매매중개업자I
 
 
 @pytest.mark.asyncio

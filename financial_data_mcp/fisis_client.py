@@ -23,13 +23,52 @@ logger = logging.getLogger("financial_data_mcp.fisis")
 BASE_URL = "https://fisis.fss.or.kr/openapi"
 RESPONSE_TTL_SECONDS = 3600  # 1시간
 
-# 대분류 코드 (2026-04-12 실 API 검증 완료)
-LARGE_DIVISIONS = {
-    "은행": "A",
-    "비은행": "B",
-    "보험": "C",
-    "금융투자": "D",
+# FISIS 금융권역 분류코드 (출처: fisis.fss.or.kr 금융권역 분류표)
+# 각 코드는 fisis_list_companies / fisis_get_statistics 의 lrg_div 파라미터에 직접 사용
+FISIS_SECTOR_CODES: dict[str, str] = {
+    # 은행
+    "국내은행": "A",
+    "외은지점": "J",
+    # 보험
+    "생명보험": "H",
+    "손해보험": "I",
+    # 금융투자
+    "투자매매중개업자I": "F",   # 증권사 (위탁·자기매매)
+    "투자매매중개업자II": "W",
+    "집합투자업자": "G",        # 자산운용사
+    "투자자문일임업자": "X",
+    "종합금융회사": "D",
+    "부동산신탁": "M",
+    # 비은행
+    "신용카드사": "C",
+    "리스사": "K",
+    "할부금융사": "T",
+    "신기술금융사": "N",
+    "상호저축은행": "E",
+    "신용협동조합": "O",
+    "농업협동조합": "Q",
+    "수산업협동조합": "P",
+    "산림조합": "S",
+    # 기타
+    "금융지주회사": "L",
+    "공통(신탁)": "B",
+    "공통(파생상품)": "R",
 }
+
+# 역방향: 코드 → 업권명
+FISIS_CODE_TO_SECTOR: dict[str, str] = {v: k for k, v in FISIS_SECTOR_CODES.items()}
+
+# 대분류 그룹핑 (참고용 — API 파라미터는 개별 코드 사용)
+FISIS_LARGE_GROUPS: dict[str, list[str]] = {
+    "은행":    ["A", "J"],
+    "보험":    ["H", "I"],
+    "금융투자": ["F", "W", "G", "X", "D", "M"],
+    "비은행":  ["C", "K", "T", "N", "E", "O", "Q", "P", "S"],
+    "기타":    ["L", "B", "R"],
+}
+
+# 하위 호환성 유지 (레거시 코드가 LARGE_DIVISIONS를 import할 경우 대비)
+LARGE_DIVISIONS = FISIS_SECTOR_CODES
 
 
 class FisisClient:

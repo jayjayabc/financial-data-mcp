@@ -200,7 +200,7 @@ class FisisClient:
             strt_yymm: 시작 연월 YYYYMM (예: 202312)
             end_yymm: 종료 연월 YYYYMM (예: 202412)
             finance_cd: 금융회사 코드 (예: 0010927)
-            lrg_div: 대분류 코드 (A=은행, B=비은행, C=보험, D=금융투자)
+            lrg_div: 금융권역 코드 (A=국내은행, J=외은지점, H=생명보험, I=손해보험, F=증권사, D=종합금융, C=신용카드사, E=저축은행, L=금융지주 등)
             sml_div: 소분류 코드
             term: 주기 — Q(분기, 기본값) 또는 Y(연간)
         """
@@ -259,7 +259,7 @@ class FisisClient:
         """금융회사 목록 조회.
 
         Args:
-            lrg_div: 대분류 코드 → partDiv로 전달 (A=은행, B=비은행, C=보험, D=금융투자)
+            lrg_div: 금융권역 코드 → partDiv로 전달 (A=국내은행, J=외은지점, H=생명보험, I=손해보험, F=증권사, D=종합금융, C=신용카드사, E=저축은행, L=금융지주 등)
             sml_div: 소분류 코드
             finance_cd: 특정 금융회사 코드
         """

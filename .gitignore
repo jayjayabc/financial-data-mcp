@@ -16,5 +16,11 @@ venv/
 screenshot*.png
 PLAN.md
 
-# 평가 파이프라인 결과물 (API 응답 데이터, 대용량 차트 포함)
-eval/results/
+# 평가 파이프라인 (로컬 전용)
+.claude/
+eval/
+
+# 개발 중 임시 탐색 스크립트
+fisis_test*.py
+fisis_explore.py
+fisis_*.json
